@@ -1,0 +1,787 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sidebar menu — design v1</title>
+<style>
+/*
+ * Sidebar menu — visual proposal v1.
+ *
+ * Static mockup with REAL data: the workspace's eight projects and their
+ * sessions, exactly as they stood when it was drawn.
+ *
+ * The problem it solves is not "the buttons are small". It is that a
+ * project header piled up four actions (collapse, move up, move down,
+ * new task, unfollow) into a 293 px row that also has to show a name of up
+ * to 18 characters. Every way of splitting that width is a bad way: either
+ * the name breaks, or the buttons are 15 px.
+ *
+ * Decisions this mockup defends, and why:
+ *
+ * 1. THE FIRST BUG IS NOT DESIGN, IT IS A CSS ACCIDENT. Measuring the real
+ *    panel to build this mockup turned up that the project name renders at
+ *    14px/400 when its own rule asks for 12px/600. The cause: there are two
+ *    `.project-name` rules in styles.css, and the second — the one that
+ *    gives it `flex: 1` — carries a `font: inherit`. The `font` shorthand
+ *    rewrites size and weight, so the rule further down wins and the name
+ *    comes out 17 px wider than its design asked for. Fixing it is not a
+ *    style change: it is making the style that already exists apply.
+ *
+ * 2. UPPERCASE AND TRACKING COST ANOTHER 24 px. That one is a decision, not
+ *    an accident: it is emphasis, and emphasis is paid in width. The
+ *    section below measures it in your browser instead of asserting it.
+ *
+ * 3. IF SOMETHING HAS TO BE CUT, CUT THROUGH THE MIDDLE. Your projects are
+ *    called GITHUB-AcmeProperty, GITHUB-AcmePayments, GITHUB-AcmePlatform,
+ *    GITHUB-AcmeSelfServe, GITHUB-AcmePilot. They share the first ten
+ *    characters and differ at the end. Truncating with "…" at the end is
+ *    precisely erasing the only thing that tells them apart.
+ *
+ * 4. REORDERING IS RARE; READING THE MENU IS CONSTANT. An action you use
+ *    three times a year cannot charge permanent rent on the row you look at
+ *    a hundred times a day. Hence the mode, instead of two fixed arrows.
+ *
+ * 5. A FINGER NEEDS 44 px. Today's controls are 15x22. Sort mode can give
+ *    each handle 44 px of height because while it is active it competes
+ *    with nothing else.
+ *
+ * 6. NO HOVER AS THE ONLY PATH. The panel gets opened from a phone. A
+ *    control that only exists under the mouse is half a control.
+ */
+
+:root {
+  /* Inherited from the deck, untouched. */
+  --bg: #0c0e11;
+  --panel: #14171c;
+  --panel-2: #1a1e25;
+  --line: #252a33;
+  --text: #e6e8eb;
+  --muted: #8b94a3;
+  --dim: #626c7d;
+  --accent: #4c8dff;
+  --waiting: #f0a83c;
+  --busy: #4c8dff;
+  --idle: #3fb950;
+  --shell: #a371f7;
+  --radius: 8px;
+
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background:
+    radial-gradient(1200px 600px at 50% -240px, rgba(76,141,255,0.05), transparent 70%),
+    var(--bg);
+  color: var(--text);
+  font: 14px/1.55 ui-sans-serif, -apple-system, "Segoe UI", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+.stage { max-width: 1240px; margin: 0 auto; padding: 26px 28px 120px; }
+
+h1 { margin: 0 0 6px; font-size: 21px; letter-spacing: -0.02em; }
+
+/* The "this is the past" stamp. It goes up top and not in a footnote because
+   its job is to be read before the rest of the page. */
+.frozen {
+  margin: 0 0 16px;
+  padding: 9px 13px;
+  background: rgba(240, 168, 60, 0.09);
+  border: 1px solid rgba(240, 168, 60, 0.3);
+  border-radius: 8px;
+  color: #d9c49b;
+  font-size: 12.5px;
+  line-height: 1.55;
+  max-width: 82ch;
+}
+.frozen b { color: #ffc978; font-weight: 600; }
+.sub { margin: 0 0 30px; color: var(--muted); font-size: 13.5px; }
+
+h2 {
+  margin: 44px 0 4px;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--dim);
+}
+h2 + .lead { margin: 0 0 18px; color: var(--muted); font-size: 13.5px; max-width: 74ch; }
+
+code { font-family: var(--mono); font-size: 0.9em; background: var(--bg); padding: 1px 5px; border-radius: 4px; }
+
+/* ---------- the problem, measured ---------- */
+
+.facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; }
+.fact {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-left: 3px solid #ff6b6b;
+  border-radius: var(--radius);
+  padding: 13px 15px;
+}
+.fact b { display: block; font-size: 22px; letter-spacing: -0.02em; margin-bottom: 2px; }
+.fact span { color: var(--muted); font-size: 12.5px; }
+
+/* ---------- width lab ---------- */
+
+.lab { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px 18px; }
+.lab table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.lab th {
+  text-align: left; color: var(--dim); font-weight: 600; font-size: 11px;
+  text-transform: uppercase; letter-spacing: 0.06em; padding: 0 10px 8px 0;
+}
+.lab td { padding: 7px 10px 7px 0; border-top: 1px solid var(--line); vertical-align: middle; }
+.lab .px { font-family: var(--mono); font-size: 12px; white-space: nowrap; }
+.bar { height: 8px; border-radius: 999px; background: var(--accent); opacity: 0.75; }
+.bar.over { background: #ff6b6b; opacity: 0.85; }
+/* The first one is what really renders today: 14px/400, because of font: inherit. */
+.sample-a { text-transform: uppercase; letter-spacing: 0.06em; font-weight: 400; font-size: 14px; }
+.sample-b { text-transform: uppercase; letter-spacing: 0.06em; font-weight: 600; font-size: 12px; }
+.sample-c { font-weight: 600; font-size: 12px; }
+.sample-d { font-weight: 500; font-size: 12.5px; }
+
+/* ---------- variant grid ---------- */
+
+.variants { display: grid; grid-template-columns: repeat(auto-fit, minmax(330px, 1fr)); gap: 26px; align-items: start; }
+
+.variant { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+.variant.is-pick { border-color: rgba(76,141,255,0.5); box-shadow: 0 0 0 1px rgba(76,141,255,0.18); }
+.variant-head { padding: 14px 16px 12px; border-bottom: 1px solid var(--line); }
+.variant-head h3 { margin: 0; font-size: 14.5px; letter-spacing: -0.01em; display: flex; align-items: center; gap: 8px; }
+.tag-pick {
+  font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.07em; font-weight: 700;
+  background: var(--accent); color: #061020; border-radius: 999px; padding: 1px 7px;
+}
+.variant-head p { margin: 6px 0 0; color: var(--muted); font-size: 12.5px; }
+
+.pair { display: flex; gap: 0; flex-wrap: wrap; }
+.pane { padding: 14px; flex: 0 1 auto; min-width: 0; }
+.pane + .pane { border-left: 1px solid var(--line); }
+/* In a narrow window the two views stack instead of spilling out of the box. */
+@media (max-width: 780px) {
+  .pane + .pane { border-left: 0; border-top: 1px solid var(--line); }
+  .side, .side.phone { width: 100%; max-width: 340px; }
+}
+.pane-label {
+  font-size: 10px; text-transform: uppercase; letter-spacing: 0.07em;
+  color: var(--dim); margin-bottom: 9px;
+}
+
+.verdict { padding: 12px 16px 15px; border-top: 1px solid var(--line); font-size: 12.5px; }
+.verdict p { margin: 0 0 6px; }
+.verdict .pro::before { content: "+ "; color: var(--idle); font-weight: 700; }
+.verdict .con::before { content: "− "; color: #ff8f8f; font-weight: 700; }
+.verdict .pro, .verdict .con { color: var(--muted); }
+
+/* ---------- the menu, reproduced ---------- */
+
+.side {
+  width: 310px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px 8px 12px;
+  user-select: none;
+}
+.side.phone { width: 340px; }
+
+.project { margin-bottom: 14px; }
+.project:last-child { margin-bottom: 0; }
+
+.head {
+  display: flex; align-items: center; gap: 3px;
+  border-radius: 5px;
+  position: relative;
+  min-height: 24px;
+}
+.chev {
+  flex: none; width: 20px; height: 20px; display: inline-flex; align-items: center; justify-content: center;
+  background: none; border: 0; color: var(--dim); cursor: pointer; border-radius: 4px;
+}
+.name {
+  flex: 1; min-width: 0;
+  padding: 0 2px 0 6px;
+  background: none; border: 0; color: var(--muted); text-align: left; cursor: pointer;
+  font: inherit; font-size: 12px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.06em;
+  display: flex; align-items: center; gap: 6px;
+}
+/* The typography the mockup proposes: normal case, no tracking. */
+.calm .name { text-transform: none; letter-spacing: 0; font-size: 12.5px; }
+.label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.btn {
+  flex: none; width: 22px; height: 22px;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: transparent; border: 1px solid transparent; border-radius: 5px;
+  color: var(--dim); font-size: 15px; line-height: 1; cursor: pointer;
+}
+.btn:hover { background: var(--panel-2); border-color: var(--line); color: var(--accent); }
+.btn.tiny { width: 15px; }
+.btn.big { width: 34px; height: 34px; border-radius: 8px; }
+
+.path { padding: 0 8px 6px; font-size: 11px; color: var(--dim); font-family: var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.row {
+  display: flex; align-items: center; gap: 8px;
+  width: 100%; padding: 7px 8px; margin-bottom: 2px;
+  background: transparent; border: 1px solid transparent; border-radius: 6px;
+  color: var(--text); font: inherit; font-size: 13px; text-align: left; cursor: pointer;
+}
+.row:hover { background: var(--panel-2); }
+.row.is-active {
+  background: rgba(76,141,255,0.14);
+  border-color: rgba(76,141,255,0.45);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+.row.is-active .row-name { color: #fff; font-weight: 600; }
+.row-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.row-meta { color: var(--dim); font-size: 11px; white-space: nowrap; }
+.dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+.dot.idle { background: var(--idle); }
+.dot.busy { background: var(--busy); }
+.dot.waiting { background: var(--waiting); }
+
+.phone .name { font-size: 13.5px; }
+.phone .row { padding: 10px 12px; font-size: 15px; }
+.phone .row-meta { font-size: 12.5px; }
+.phone .btn { width: 34px; height: 34px; border-radius: 8px; }
+.phone .btn.big { width: 44px; height: 44px; }
+
+/* ---------- A: actions on hover ---------- */
+
+.hoverbar {
+  position: absolute; right: 0; top: 0; bottom: 0;
+  display: flex; align-items: center; gap: 2px; padding-left: 26px;
+  opacity: 0; pointer-events: none;
+  background: linear-gradient(to right, rgba(20,23,28,0), var(--panel) 26px);
+  transition: opacity 90ms ease;
+}
+.head:hover .hoverbar, .head:focus-within .hoverbar { opacity: 1; pointer-events: auto; }
+
+/* ---------- B/D: three-dot menu ---------- */
+
+.menu-wrap { position: relative; flex: none; }
+.menu {
+  position: absolute; right: 0; top: calc(100% + 4px); z-index: 30;
+  min-width: 194px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: 0 14px 34px rgba(0,0,0,0.55);
+  padding: 4px;
+  display: none;
+}
+.menu.is-open { display: block; }
+.menu button {
+  display: flex; align-items: center; gap: 9px; width: 100%;
+  padding: 8px 10px;
+  background: none; border: 0; border-radius: 6px;
+  color: var(--text); font: inherit; font-size: 13px; text-align: left; cursor: pointer;
+}
+.phone .menu button { padding: 12px 12px; font-size: 15px; }
+.menu button:hover { background: rgba(255,255,255,0.055); }
+.menu button.danger { color: #ff8f8f; }
+.menu .sep { height: 1px; background: var(--line); margin: 4px 2px; }
+.menu .k { margin-left: auto; color: var(--dim); font-size: 11px; font-family: var(--mono); }
+
+/* ---------- C/D: sort mode ---------- */
+
+/*
+ * The HTML's [hidden] comes from the browser sheet, and any author display
+ * beats it even at the same specificity. Without this line the mode's bar
+ * shows up before you enter the mode.
+ */
+.modebar[hidden] { display: none; }
+.modebar {
+  display: flex; align-items: center; gap: 8px;
+  margin: 0 0 10px; padding: 7px 9px;
+  background: rgba(76,141,255,0.1);
+  border: 1px solid rgba(76,141,255,0.35);
+  border-radius: 7px;
+  font-size: 12px; color: #bcd4ff;
+}
+.modebar b { font-weight: 600; }
+.modebar .done {
+  margin-left: auto; background: var(--accent); color: #061020;
+  border: 0; border-radius: 999px; padding: 4px 11px; font: inherit; font-size: 11.5px; font-weight: 600; cursor: pointer;
+}
+.phone .modebar { font-size: 13.5px; padding: 10px 12px; }
+.phone .modebar .done { padding: 8px 16px; font-size: 13.5px; }
+
+.sorting .project { margin-bottom: 4px; }
+.sorting .path, .sorting .rows, .sorting .chev { display: none; }
+.sorting .head {
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 3px 4px 3px 10px;
+  gap: 4px;
+  min-height: 44px;
+}
+.sorting .name { pointer-events: none; }
+.grip { flex: none; width: 14px; color: var(--dim); font-size: 13px; line-height: 1; letter-spacing: -1px; }
+
+/*
+ * Inside the mode the handles grow on desktop too. That is the reason the
+ * mode exists: while it is active nothing competes for the width, so there
+ * is no reason to keep drawing 22 px targets.
+ */
+.sorting .sorthandles .btn {
+  width: 34px; height: 34px; border-radius: 8px;
+  background: var(--panel); border-color: var(--line); color: var(--muted);
+}
+.sorting .sorthandles .btn:hover { color: var(--accent); border-color: rgba(76,141,255,0.5); }
+.phone.sorting .sorthandles .btn { width: 44px; height: 44px; }
+
+.moved { animation: flash 420ms ease; }
+@keyframes flash {
+  0% { background: rgba(76,141,255,0.30); }
+  100% { background: var(--panel-2); }
+}
+
+.hint { margin: 10px 0 0; color: var(--dim); font-size: 11.5px; }
+
+/* ---------- recommendation ---------- */
+
+.rec {
+  background: linear-gradient(180deg, rgba(76,141,255,0.08), transparent 60%), var(--panel);
+  border: 1px solid rgba(76,141,255,0.35);
+  border-radius: 12px;
+  padding: 18px 20px;
+}
+.rec ol { margin: 10px 0 0; padding-left: 20px; color: var(--muted); font-size: 13.5px; }
+.rec li { margin: 7px 0; }
+.rec li b { color: var(--text); font-weight: 600; }
+</style>
+</head>
+<body>
+<div class="stage">
+
+  <h1>Sidebar menu — design v1</h1>
+  <p class="frozen">
+    <b>24 Sep 2026 · decided: option B · implemented.</b>
+    Where this page says “today” it means the panel of that day, before anyone
+    touched it. Several of those sentences are already false on purpose: describing
+    the problem was the page's job, and the problem is fixed. The panel rules; this
+    is the record of how it was decided.
+  </p>
+  <p class="sub">
+    A mockup to decide before implementing. The eight projects and their sessions are
+    the ones in your workspace. Everything you see here works: hover, open the
+    menus, enter sort mode and move projects around.
+  </p>
+
+  <h2>The problem, measured</h2>
+  <p class="lead">
+    It is not that the buttons are small. It is that a project header piled up
+    four actions into a 293&nbsp;px row that also has to say a name of
+    18 characters. Every way of splitting that width is a bad way.
+  </p>
+  <div class="facts">
+    <div class="fact">
+      <b>15 × 22 px</b>
+      <span>What the order arrows measure today. A touch guideline asks for 44 px.
+      With a finger it is not that it is hard: it is that you miss.</span>
+    </div>
+    <div class="fact">
+      <b>190 of 176 px</b>
+      <span>What the longest name needs <em>when the project has something
+      waiting for you</em> — 165 of text plus 25 of badge — against what it has
+      left. That is why it breaks exactly when you look at it most.</span>
+    </div>
+    <div class="fact">
+      <b>14px / 400</b>
+      <span>The size the name renders at today, when its own rule asks for
+      12px/600. There are two <code>.project-name</code> rules in the CSS and the
+      second carries a <code>font: inherit</code> that stomps the first.</span>
+    </div>
+    <div class="fact">
+      <b>10 of 17 characters</b>
+      <span>What <code>GITHUB-AcmeProperty</code> and <code>GITHUB-AcmePayments</code> share.
+      They differ at the end, which is exactly what a trailing “…” erases.</span>
+    </div>
+  </div>
+
+  <h2>Where the pixels come from</h2>
+  <p class="lead">
+    Two different things, and they are worth keeping apart. The first is an accident:
+    there are two <code>.project-name</code> rules in <code>styles.css</code> and the
+    second carries <code>font: inherit</code>, a shorthand that rewrites size and weight,
+    so the name comes out at 14px/400 when its own rule asks for 12px/600.
+    The second one is a decision: uppercase with tracking is emphasis, and
+    emphasis is paid in width. This table measures itself in your browser on load, with the
+    same engine that later draws the menu; the red bar is the one that does not fit.
+  </p>
+  <div class="lab">
+    <table id="lab">
+      <thead>
+        <tr><th>Typography</th><th>How it looks</th><th>Width</th><th style="width:34%" id="budget-th">Against the budget</th></tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+    <p class="hint">
+      Measured on <code>GITHUB-AcmeSelfServe</code>, the longest of your eight. And the
+      “something is waiting” badge still has to be added: 18 px plus 7 of gap, the ones that
+      make the name break on exactly the project demanding your attention.
+    </p>
+  </div>
+
+  <h2>Four ways to split the row</h2>
+  <p class="lead">
+    All four take the typography change above for granted. What changes between
+    them is where the actions live. Each one is drawn on desktop and on
+    phone, because the split that works with a mouse is not the one that works
+    with a finger.
+  </p>
+
+  <div class="variants">
+
+    <!-- ============ A ============ -->
+    <article class="variant">
+      <div class="variant-head">
+        <h3>A · Like VS Code</h3>
+        <p>The actions do not exist until you hover, and then they appear
+        over the end of the name, taking width from nobody.</p>
+      </div>
+      <div class="pair">
+        <div class="pane">
+          <div class="pane-label">Desktop · hover a row</div>
+          <div class="side calm" data-variant="a"></div>
+        </div>
+        <div class="pane">
+          <div class="pane-label">Phone</div>
+          <div class="side phone calm" data-variant="a-phone"></div>
+        </div>
+      </div>
+      <div class="verdict">
+        <p class="pro">The name uses the whole row while you read, which is 99% of the time.</p>
+        <p class="pro">It is exactly the VS Code gesture: zero new things to learn.</p>
+        <p class="con">On a phone there is no hover, so a separate path is needed anyway — here, the ⋯.</p>
+        <p class="con">Four 22 px icons are still four small targets, only hidden.</p>
+      </div>
+    </article>
+
+    <!-- ============ B ============ -->
+    <article class="variant">
+      <div class="variant-head">
+        <h3>B · Everything in one menu</h3>
+        <p>The row keeps what you use daily — new task — and the rest goes
+        into a three-dot menu, the same on desktop and on mobile.</p>
+      </div>
+      <div class="pair">
+        <div class="pane">
+          <div class="pane-label">Desktop · hit the ⋯</div>
+          <div class="side calm" data-variant="b"></div>
+        </div>
+        <div class="pane">
+          <div class="pane-label">Phone · same menu, 44 px rows</div>
+          <div class="side phone calm" data-variant="b-phone"></div>
+        </div>
+      </div>
+      <div class="verdict">
+        <p class="pro">One path for both screens: what you learn sitting down serves you standing up.</p>
+        <p class="pro">The options can be called by their name — “Move up”, not a 9 px arrow.</p>
+        <p class="con">Reordering costs one menu opening per hop.</p>
+        <p class="con">Moving a project six places is six menu openings.</p>
+      </div>
+    </article>
+
+    <!-- ============ C ============ -->
+    <article class="variant">
+      <div class="variant-head">
+        <h3>C · Sort mode</h3>
+        <p>The row carries nothing about ordering. A switch up top turns the whole
+        menu into a list of big handles, and on exit everything goes back to normal.</p>
+      </div>
+      <div class="pair">
+        <div class="pane">
+          <div class="pane-label">Desktop · hit “Reorder”</div>
+          <div class="side calm" data-variant="c"></div>
+        </div>
+        <div class="pane">
+          <div class="pane-label">Phone · 44 px handles</div>
+          <div class="side phone calm" data-variant="c-phone"></div>
+        </div>
+      </div>
+      <div class="verdict">
+        <p class="pro">Reordering stops charging rent on a row you look at a hundred times a day.</p>
+        <p class="pro">While the mode is active nothing competes: 44 px handles fit.</p>
+        <p class="pro">It collapses the sessions, so you see all eight projects at once and sort in one go.</p>
+        <p class="con">It is a new concept: you have to discover the mode exists.</p>
+      </div>
+    </article>
+
+    <!-- ============ D ============ -->
+    <article class="variant is-pick">
+      <div class="variant-head">
+        <h3>D · B + C <span class="tag-pick">proposal</span></h3>
+        <p>The row carries a name and two buttons. The menu holds the rare stuff, and from the
+        menu you enter sort mode, which is where the order actually gets touched.</p>
+      </div>
+      <div class="pair">
+        <div class="pane">
+          <div class="pane-label">Desktop · ⋯ → “Reorder projects”</div>
+          <div class="side calm" data-variant="d"></div>
+        </div>
+        <div class="pane">
+          <div class="pane-label">Phone</div>
+          <div class="side phone calm" data-variant="d-phone"></div>
+        </div>
+      </div>
+      <div class="verdict">
+        <p class="pro">Two controls in the row instead of four, and both a real 22 px.</p>
+        <p class="pro">Sorting happens in one pass, with targets a finger actually hits.</p>
+        <p class="pro">Identical on desktop and phone. No feature lives only in hover.</p>
+        <p class="con">Unfollowing a project goes from one click to two. It is a destructive action: that does not look like a cost to me, it looks like a second question.</p>
+      </div>
+    </article>
+
+  </div>
+
+  <h2>What I would implement</h2>
+  <div class="rec">
+    <ol>
+      <li><b>Fix the <code>font: inherit</code> that stomps the name's typography.</b>
+      It is not a design change: it is making the design that is already written apply.
+      It gives back 17 px and it is one line of CSS.</li>
+      <li><b>Normal case, no tracking.</b> Another 24 px, without removing a single feature.
+      Between the two, the longest name goes from 165 px to 124 and stops sitting on the
+      edge of breaking.</li>
+      <li><b>The “something is waiting” badge, out of the name.</b> Today it lives inside it
+      and steals 25 px on exactly the project you want to read. At the end of the row it
+      takes nothing from anyone.</li>
+      <li><b>If something still has to be cut, cut through the middle</b> —
+      <code>GITHUB-Acme…SelfServe</code> — because your names differ at the end.
+      With the full name in the <code>title</code>.</li>
+      <li><b>The row keeps the name, “new task” and a ⋯.</b> Unfollow
+      goes to the menu, where a destructive action belongs.</li>
+      <li><b>The arrows disappear from the row</b> and the order moves into a mode opened
+      from the ⋯: it collapses the sessions, shows all eight projects at once and gives
+      44 px to each handle.</li>
+      <li><b>Drag can be added on top of the mode later</b> without throwing anything away:
+      inside the mode it no longer competes with the list's scroll, which was what made
+      that option expensive.</li>
+    </ol>
+  </div>
+
+</div>
+
+<script>
+/*
+ * Real workspace data. The order is the one the menu had when this was drawn.
+ */
+const PROJECTS = [
+  { name: 'GITHUB-AcmePilot',     path: '~/work/GITHUB-AcmePilot',     sessions: [['github-acmepilot-9d', 'idle', 'idle']] },
+  { name: 'GITHUB-AcmeProperty',  path: '~/work/GITHUB-AcmeProperty',  sessions: [] },
+  { name: 'GITHUB-AcmePayments',  path: '~/work/GITHUB-AcmePayments',  sessions: [['github-acmepayments-1c', 'idle', 'idle']] },
+  { name: 'GITHUB-AcmeSelfServe', path: '~/work/GITHUB-AcmeSelfServe', sessions: [['github-acmeselfserve-ad', 'busy', 'working']] },
+  { name: 'session-deck',      path: '~/code/session-deck',      sessions: [['session-deck-7c', 'busy', 'working']], active: true },
+  { name: 'GITHUB-AcmePlatform',   path: '~/work/GITHUB-AcmePlatform',   sessions: [['github-acmeplatform-25', 'idle', 'idle'], ['github-acmeplatform-9b', 'waiting', 'Write']] },
+  { name: 'toolbox',            path: '~/work/toolbox',            sessions: [['toolbox-4f', 'idle', 'idle']] },
+  { name: 'shop-admin',        path: '~/code/shop-admin',        sessions: [['when I open a product page the total is wrong', 'idle', 'resumable']] },
+]
+
+const ICON = {
+  chevron: '<svg viewBox="0 0 10 10" width="9" height="9"><path d="M2 3.5 L5 6.5 L8 3.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  up: '<svg viewBox="0 0 12 12" width="11" height="11"><path d="M2.5 7.5 L6 4 L9.5 7.5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  down: '<svg viewBox="0 0 12 12" width="11" height="11"><path d="M2.5 4.5 L6 8 L9.5 4.5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  dots: '<svg viewBox="0 0 14 14" width="13" height="13"><circle cx="7" cy="3" r="1.15" fill="currentColor"/><circle cx="7" cy="7" r="1.15" fill="currentColor"/><circle cx="7" cy="11" r="1.15" fill="currentColor"/></svg>',
+}
+
+/* ---------- the measurement ---------- */
+
+/* The name's real budget in today's panel, measured: 186 of box minus 10 of padding. */
+const BUDGET = 176
+
+/*
+ * Measured with the DOM and not with canvas on purpose. `canvas.measureText`
+ * does not resolve the font stack the way the renderer does — it gave 148 px
+ * where the real panel draws 165 — and a mockup whose argument is pixels
+ * cannot measure them with a different ruler than the one that draws them.
+ */
+function measure(text, cls) {
+  const el = document.createElement('span')
+  el.className = cls
+  el.textContent = text
+  el.style.cssText = 'position:absolute;visibility:hidden;white-space:nowrap;left:-9999px'
+  document.body.appendChild(el)
+  const w = Math.ceil(el.getBoundingClientRect().width)
+  el.remove()
+  return w
+}
+
+const SAMPLE = 'GITHUB-AcmeSelfServe'
+const ROWS = [
+  { label: 'What renders today · 14px/400 uppercase',     cls: 'sample-a', text: SAMPLE.toUpperCase() },
+  { label: 'What the CSS asked for · 12px/600 uppercase', cls: 'sample-b', text: SAMPLE.toUpperCase() },
+  { label: 'Normal case, no tracking · 12px/600',         cls: 'sample-c', text: SAMPLE },
+  { label: 'Normal case · 12.5px/500',                    cls: 'sample-d', text: SAMPLE },
+]
+
+document.querySelector('#budget-th').textContent = `Against the budget (${BUDGET} px)`
+
+const body = document.querySelector('#lab tbody')
+const widest = Math.max(...ROWS.map((r) => measure(r.text, r.cls)), BUDGET)
+for (const r of ROWS) {
+  const w = measure(r.text, r.cls)
+  const over = w > BUDGET
+  body.insertAdjacentHTML('beforeend', `
+    <tr>
+      <td>${r.label}</td>
+      <td><span class="${r.cls}">${r.text}</span></td>
+      <td class="px">${w} px</td>
+      <td>
+        <div class="bar ${over ? 'over' : ''}" style="width:${Math.round((w / widest) * 100)}%"></div>
+        <div class="px" style="color:var(--dim);padding-top:4px">${over ? 'does not fit, it breaks' : `${BUDGET - w} px to spare`}</div>
+      </td>
+    </tr>`)
+}
+
+/* ---------- the reproduced menu ---------- */
+
+function sessionsHtml(p) {
+  if (!p.sessions.length) return '<p style="margin:2px 0 0 8px;font-size:11.5px;color:var(--dim);font-style:italic">no sessions</p>'
+  return p.sessions.map(([name, dot, meta], i) => `
+    <button class="row ${p.active && i === 0 ? 'is-active' : ''}">
+      <span class="dot ${dot}"></span>
+      <span class="row-name">${name}</span>
+      <span class="row-meta">${meta}</span>
+    </button>`).join('')
+}
+
+/** The controls on the right, which is the only thing that changes between variants. */
+function controls(variant) {
+  const tail = variant.replace('-phone', '')
+  if (tail === 'a') {
+    return `<div class="hoverbar">
+      <button class="btn" title="Move up">${ICON.up}</button>
+      <button class="btn" title="Move down">${ICON.down}</button>
+      <button class="btn" title="New task">+</button>
+      <button class="btn" title="Unfollow">×</button>
+    </div>`
+  }
+  if (tail === 'b' || tail === 'd') {
+    return `<button class="btn" title="New task">+</button>
+      <span class="menu-wrap">
+        <button class="btn dots" title="More">${ICON.dots}</button>
+        <div class="menu">
+          <button data-do="task">New task<span class="k">+</span></button>
+          ${tail === 'b'
+            ? `<button data-do="up">Move up</button><button data-do="down">Move down</button>`
+            : `<button data-do="sort">Reorder projects…</button>`}
+          <div class="sep"></div>
+          <button class="danger" data-do="drop">Unfollow</button>
+        </div>
+      </span>`
+  }
+  return `<button class="btn" title="New task">+</button>`
+}
+
+function render(root) {
+  const variant = root.dataset.variant
+  const tail = variant.replace('-phone', '')
+  const phone = variant.includes('phone')
+  const needsBar = tail === 'c' || tail === 'd'
+
+  root.innerHTML = `
+    ${needsBar ? `<div class="modebar" hidden>
+        <b>Sorting</b> <span style="color:var(--muted)">— move the projects</span>
+        <button class="done">Done</button>
+      </div>` : ''}
+    ${tail === 'c' ? `<button class="btn" style="width:auto;padding:0 9px;font-size:11.5px;margin:0 0 8px 4px;color:var(--muted)">Reorder</button>` : ''}
+    <div class="list">
+      ${PROJECTS.map((p) => `
+        <section class="project">
+          <div class="head">
+            <span class="grip" hidden>⠿</span>
+            <button class="chev">${ICON.chevron}</button>
+            <span class="name"><span class="label" title="${p.name}">${p.name}</span></span>
+            ${controls(variant)}
+            <span class="sorthandles" hidden style="display:none;gap:4px">
+              <button class="btn ${phone ? 'big' : ''}" data-move="up">${ICON.up}</button>
+              <button class="btn ${phone ? 'big' : ''}" data-move="down">${ICON.down}</button>
+            </span>
+          </div>
+          <div class="rows">
+            <div class="path">${p.path}</div>
+            ${sessionsHtml(p)}
+          </div>
+        </section>`).join('')}
+    </div>`
+
+  wire(root)
+}
+
+function wire(root) {
+  const list = root.querySelector('.list')
+
+  // Three-dot menus: one open at a time.
+  root.querySelectorAll('.dots').forEach((b) => {
+    b.addEventListener('click', (e) => {
+      e.stopPropagation()
+      const menu = b.parentElement.querySelector('.menu')
+      const open = menu.classList.contains('is-open')
+      document.querySelectorAll('.menu.is-open').forEach((m) => m.classList.remove('is-open'))
+      if (!open) menu.classList.add('is-open')
+    })
+  })
+
+  const setSorting = (on) => {
+    root.classList.toggle('sorting', on)
+    const bar = root.querySelector('.modebar')
+    if (bar) bar.hidden = !on
+    root.querySelectorAll('.sorthandles').forEach((h) => { h.hidden = !on; h.style.display = on ? 'flex' : 'none' })
+    root.querySelectorAll('.grip').forEach((g) => { g.hidden = !on })
+    root.querySelectorAll('.head > .btn, .head > .menu-wrap, .head > .hoverbar').forEach((el) => {
+      el.style.display = on ? 'none' : ''
+    })
+  }
+
+  root.querySelectorAll('[data-do="sort"]').forEach((b) => b.addEventListener('click', () => {
+    document.querySelectorAll('.menu.is-open').forEach((m) => m.classList.remove('is-open'))
+    setSorting(true)
+  }))
+  const toggle = root.querySelector(':scope > .btn')
+  if (toggle && toggle.textContent.trim() === 'Reorder') toggle.addEventListener('click', () => setSorting(true))
+  const done = root.querySelector('.done')
+  if (done) done.addEventListener('click', () => setSorting(false))
+
+  const swap = (section, dir) => {
+    const sibling = dir === 'up' ? section.previousElementSibling : section.nextElementSibling
+    if (!sibling) return
+    if (dir === 'up') list.insertBefore(section, sibling)
+    else list.insertBefore(sibling, section)
+    const head = section.querySelector('.head')
+    head.classList.remove('moved')
+    void head.offsetWidth
+    head.classList.add('moved')
+  }
+
+  root.querySelectorAll('[data-move]').forEach((b) => b.addEventListener('click', (e) => {
+    e.stopPropagation()
+    swap(b.closest('.project'), b.dataset.move)
+  }))
+  root.querySelectorAll('[data-do="up"], [data-do="down"], .hoverbar .btn[title="Move up"], .hoverbar .btn[title="Move down"]').forEach((b) => {
+    b.addEventListener('click', (e) => {
+      e.stopPropagation()
+      document.querySelectorAll('.menu.is-open').forEach((m) => m.classList.remove('is-open'))
+      const dir = (b.dataset.do === 'up' || b.title === 'Move up') ? 'up' : 'down'
+      swap(b.closest('.project'), dir)
+    })
+  })
+}
+
+document.addEventListener('click', () => {
+  document.querySelectorAll('.menu.is-open').forEach((m) => m.classList.remove('is-open'))
+})
+
+document.querySelectorAll('.side').forEach(render)
+</script>
+</body>
+</html>

@@ -1,0 +1,555 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Session header — design v1</title>
+<style>
+/*
+ * Session header — v1. Two things at once:
+ *
+ *   1. Fit in the model and the effort, the way the permission mode fits.
+ *   2. Stop the header eating a fifth of the screen.
+ *
+ * MEASURED in the panel, 1500x950 window (888 px tall viewport):
+ *
+ *     deck session header ...................... 172 px  = 19% of the height
+ *     ... plus the permissions banner .......... ~212 px = 24%
+ *     left column (name + path) ................ 2 rows
+ *     right column ............................. 4 stacked rows
+ *         state ................................ 19
+ *         tabs ................................. 30
+ *         time + permissions + Kill ............ 89
+ *     row width ................................ 1190 px
+ *
+ * The diagnosis: there is no extra content, there is extra COLUMN. Everything
+ * is squeezed into two narrow towers glued to the edges and the middle of a
+ * 1190 px row stays empty. The permissions strip is what breaks it: three
+ * labels in a row do not fit in 235 px, so it wraps, and every wrap pushes
+ * the conversation another thirty pixels down.
+ *
+ * WHAT THE SDK REALLY ALLOWS (@anthropic-ai/claude-agent-sdk, read from its
+ * types, not assumed):
+ *
+ *     query.setModel(model?)                     -> switches model live
+ *     query.applyFlagSettings({ effortLevel })   -> switches effort live
+ *     query.supportedModels() -> ModelInfo[]     -> which models exist, and
+ *                                                   for each: displayName,
+ *                                                   description, whether it
+ *                                                   takes effort and WHICH
+ *                                                   LEVELS
+ *
+ * Three design consequences fall out of that:
+ *
+ * 1. THE MODEL LIST IS NOT WRITTEN BY HAND. The question "which models do I
+ *    have" is answered by the session, the same way permission modes are
+ *    answered today by the server and not by the browser. A dropdown of
+ *    invented models ages the day a new one ships.
+ *
+ * 2. EFFORT LEVELS DEPEND ON THE MODEL. ModelInfo carries
+ *    supportedEffortLevels; not every model has all five. Picking a model has
+ *    to rewrite the effort list, not just leave it sitting there.
+ *
+ * 3. ASKING IS NOT GETTING, AGAIN. 'max' is session-only, never persisted,
+ *    and on a model without support it runs as 'high' in silence; an
+ *    organization can also cap the level. It is exactly the rule the deck
+ *    README already argues for permissions -- "a requested mode is not a
+ *    granted mode" -- so the header shows what was granted, and says when it
+ *    does not match what was asked.
+ */
+
+:root {
+  --bg: #0c0e11;
+  --panel: #14171c;
+  --panel-2: #1a1e25;
+  --line: #252a33;
+  --text: #e6e8eb;
+  --muted: #8b94a3;
+  --dim: #626c7d;
+  --accent: #4c8dff;
+  --waiting: #f0a83c;
+  --idle: #3fb950;
+  --busy: #4c8dff;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: radial-gradient(1200px 600px at 50% -240px, rgba(76,141,255,0.05), transparent 70%), var(--bg);
+  color: var(--text);
+  font: 14px/1.55 ui-sans-serif, -apple-system, "Segoe UI", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+.stage { max-width: 1320px; margin: 0 auto; padding: 26px 28px 140px; }
+h1 { margin: 0 0 6px; font-size: 21px; letter-spacing: -0.02em; }
+.sub { margin: 0 0 22px; color: var(--muted); font-size: 13.5px; max-width: 84ch; }
+h2 { margin: 44px 0 4px; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; color: var(--dim); }
+h2 + .lead { margin: 0 0 18px; color: var(--muted); font-size: 13.5px; max-width: 84ch; }
+code { font-family: var(--mono); font-size: 0.9em; background: var(--bg); padding: 1px 5px; border-radius: 4px; }
+
+.facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 12px; margin-bottom: 8px; }
+.fact { background: var(--panel); border: 1px solid var(--line); border-left: 3px solid #ff6b6b; border-radius: 8px; padding: 12px 14px; }
+.fact b { display: block; font-size: 21px; letter-spacing: -0.02em; margin-bottom: 2px; }
+.fact span { color: var(--muted); font-size: 12.5px; }
+
+/* ---------- the mockups ---------- */
+
+.case { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; margin-bottom: 22px; }
+.case.is-pick { border-color: rgba(76,141,255,0.5); box-shadow: 0 0 0 1px rgba(76,141,255,0.18); }
+.case-head { padding: 14px 16px 12px; border-bottom: 1px solid var(--line); }
+.case-head h3 { margin: 0; font-size: 14.5px; display: flex; align-items: center; gap: 8px; }
+.tag-pick { font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.07em; font-weight: 700; background: var(--accent); color: #061020; border-radius: 999px; padding: 1px 7px; }
+.case-head p { margin: 6px 0 0; color: var(--muted); font-size: 12.5px; max-width: 90ch; }
+.case-body { padding: 16px; background: var(--bg); }
+.ruler { display: flex; align-items: center; gap: 8px; margin: 0 0 8px; font-size: 11px; color: var(--dim); font-family: var(--mono); }
+.ruler i { flex: 1; height: 1px; background: var(--line); }
+.note { padding: 12px 16px 14px; border-top: 1px solid var(--line); font-size: 12.5px; color: var(--muted); }
+.note p { margin: 0 0 5px; }
+.note .pro::before { content: "+ "; color: var(--idle); font-weight: 700; }
+.note .con::before { content: "− "; color: #ff8f8f; font-weight: 700; }
+
+/* ---------- the panel, reproduced ---------- */
+
+.pane { border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: var(--bg); }
+
+.head {
+  display: flex; align-items: center; gap: 12px;
+  padding: 9px 14px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+}
+.head-id { display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1; }
+.dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+.dot.idle { background: var(--idle); }
+.dot.busy { background: var(--busy); }
+.name { font-size: 14px; font-weight: 600; letter-spacing: -0.01em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tag { flex: none; font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--accent); border: 1px solid rgba(76,141,255,0.4); border-radius: 3px; padding: 0 4px; line-height: 15px; }
+.head-right { display: flex; align-items: center; gap: 8px; flex: none; }
+
+.seg { display: inline-flex; background: var(--panel-2); border: 1px solid var(--line); border-radius: 7px; padding: 2px; }
+.seg button { background: none; border: 0; border-radius: 5px; color: var(--dim); font: inherit; font-size: 12px; padding: 3px 9px; cursor: pointer; }
+.seg button.is-on { background: var(--bg); color: var(--text); }
+
+/* The chips: one fact and, if you can touch it, a menu behind. */
+.chip {
+  display: inline-flex; align-items: center; gap: 5px;
+  height: 24px; padding: 0 8px;
+  background: transparent; border: 1px solid var(--line); border-radius: 6px;
+  color: var(--muted); font: inherit; font-size: 11.5px; cursor: pointer;
+  white-space: nowrap;
+}
+.chip:hover { border-color: #3a4150; color: var(--text); }
+.chip .k { color: var(--dim); }
+.chip .v { color: var(--text); font-weight: 600; }
+.chip.is-static { cursor: default; border-style: dashed; }
+.chip.is-static:hover { border-color: var(--line); color: var(--muted); }
+.chip.is-danger { color: #ff8f8f; border-color: transparent; }
+.chip.is-danger:hover { border-color: #5a2b2b; background: rgba(255,100,100,0.08); }
+.chip .caret { color: var(--dim); font-size: 9px; }
+/* Requested != granted. */
+.chip.is-capped .v { color: var(--waiting); }
+
+.state { font-size: 11.5px; color: var(--idle); }
+.state.waiting { color: var(--waiting); }
+
+/* the second line, the one you only read */
+.detail {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  padding: 6px 14px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+  font-size: 11.5px; color: var(--dim);
+}
+.detail .path { font-family: var(--mono); }
+.detail .branch { color: var(--muted); }
+.detail .branch::before { content: "⎇ "; color: var(--dim); }
+
+/* the status bar at the bottom */
+.statusbar {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  padding: 5px 14px;
+  border-top: 1px solid var(--line);
+  background: var(--panel);
+  font-size: 11.5px; color: var(--dim);
+}
+.statusbar .grow { flex: 1; }
+
+.ctx { display: inline-flex; align-items: center; gap: 6px; }
+.ctx-track { width: 42px; height: 4px; border-radius: 999px; background: var(--line); overflow: hidden; }
+.ctx-fill { height: 100%; background: var(--accent); }
+
+.body { padding: 16px 14px; min-height: 150px; }
+.msg { display: grid; grid-template-columns: 54px 1fr; gap: 12px; margin-bottom: 14px; }
+.role { color: var(--dim); font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.06em; }
+.msg p { margin: 0; color: #d3d7dd; font-size: 13px; }
+.composer { display: flex; gap: 8px; padding: 10px 14px; border-top: 1px solid var(--line); background: var(--panel); }
+.composer input { flex: 1; background: var(--bg); border: 1px solid var(--line); border-radius: 7px; color: var(--muted); font: inherit; font-size: 13px; padding: 7px 10px; }
+.composer button { background: var(--accent); color: #061020; border: 0; border-radius: 7px; font: inherit; font-size: 13px; font-weight: 600; padding: 7px 16px; cursor: pointer; }
+
+/* today's header, for comparison */
+.old .head { display: block; padding: 14px; }
+.old .old-grid { display: flex; justify-content: space-between; gap: 20px; }
+.old-left { min-width: 0; }
+.old-left h4 { margin: 0 0 4px; font-size: 14px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+.old-left .sub2 { font-size: 11.5px; color: var(--dim); font-family: var(--mono); }
+.old-right { display: flex; flex-direction: column; align-items: flex-end; gap: 7px; width: 235px; flex: none; }
+.old-seg { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
+.pill { border: 1px solid var(--line); border-radius: 6px; padding: 3px 9px; font-size: 11.5px; color: var(--dim); background: var(--panel-2); }
+.pill.is-on { background: var(--bg); color: var(--text); }
+.warn { padding: 8px 14px; background: rgba(240,168,60,0.09); border-bottom: 1px solid rgba(240,168,60,0.25); color: #d9c49b; font-size: 12px; }
+
+/* ---------- menus ---------- */
+
+.menu-wrap { position: relative; }
+.menu {
+  position: absolute; right: 0; top: calc(100% + 5px); z-index: 40;
+  min-width: 250px; padding: 4px;
+  background: var(--panel-2); border: 1px solid var(--line); border-radius: 9px;
+  box-shadow: 0 16px 38px rgba(0,0,0,0.6);
+  display: none;
+}
+.menu.is-open { display: block; }
+.menu-title { padding: 7px 10px 5px; font-size: 10px; text-transform: uppercase; letter-spacing: 0.07em; color: var(--dim); }
+.menu button {
+  display: block; width: 100%; padding: 7px 10px;
+  background: none; border: 0; border-radius: 6px;
+  color: var(--text); font: inherit; font-size: 13px; text-align: left; cursor: pointer;
+}
+.menu button:hover:not(:disabled) { background: rgba(255,255,255,0.055); }
+.menu button:disabled { color: var(--dim); cursor: default; }
+.menu button .desc { display: block; font-size: 11.5px; color: var(--dim); margin-top: 1px; }
+.menu button.is-on { background: rgba(76,141,255,0.16); }
+.menu button.is-on .desc { color: #9db8e6; }
+.menu-foot { padding: 7px 10px 6px; border-top: 1px solid var(--line); margin-top: 4px; font-size: 11px; color: var(--dim); line-height: 1.5; }
+
+.rec { background: linear-gradient(180deg, rgba(76,141,255,0.08), transparent 60%), var(--panel); border: 1px solid rgba(76,141,255,0.35); border-radius: 12px; padding: 18px 20px; }
+.rec ol { margin: 10px 0 0; padding-left: 20px; color: var(--muted); font-size: 13.5px; }
+.rec li { margin: 8px 0; }
+.rec li b { color: var(--text); font-weight: 600; }
+.ideas { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 12px; }
+.idea { background: var(--panel); border: 1px solid var(--line); border-radius: 9px; padding: 13px 15px; }
+.idea h4 { margin: 0 0 5px; font-size: 13px; display: flex; align-items: center; gap: 7px; }
+.idea p { margin: 0; color: var(--muted); font-size: 12.5px; }
+.idea .src { display: block; margin-top: 7px; font-family: var(--mono); font-size: 10.5px; color: var(--dim); }
+.yes { color: var(--idle); } .maybe { color: var(--waiting); } .no { color: #ff8f8f; }
+</style>
+</head>
+<body>
+<div class="stage">
+
+  <h1>Session header — v1</h1>
+  <p class="sub">
+    Two things at once: put <b>model</b> and <b>effort</b> where the permission mode
+    already is, and stop the header eating a fifth of the screen. Everything below
+    works: open the chips, switch model and watch what happens to the effort
+    list.
+  </p>
+
+  <h2>What it measures today</h2>
+  <p class="lead">
+    Measured in the panel with a 1500×950 window. There is no extra content: there
+    is extra column. Everything is squeezed into two narrow towers glued to the
+    edges and the middle of a 1190 px row stays empty.
+  </p>
+  <div class="facts">
+    <div class="fact"><b>172 px</b><span>Header height on a deck session — 19% of the window, before you read a single word.</span></div>
+    <div class="fact"><b>~212 px</b><span>With the permissions banner on top, as in your screenshot. Almost a quarter.</span></div>
+    <div class="fact"><b>4 rows</b><span>What the right column stacks — state, tabs, time, permissions and Kill — in 235 px of width.</span></div>
+    <div class="fact"><b>1190 px</b><span>The width of that same row. The permissions strip does not fit in 235, so it wraps, and every wrap drops the conversation 30 px.</span></div>
+  </div>
+
+  <div class="case" style="margin-top:22px">
+    <div class="case-head">
+      <h3>Today</h3>
+      <p>Reproduced to scale for comparison. The tower on the right is the problem.</p>
+    </div>
+    <div class="case-body">
+      <div class="ruler"><span>172 px</span><i></i><span>19% of the window</span></div>
+      <div class="pane old">
+        <div class="head">
+          <div class="old-grid">
+            <div class="old-left">
+              <h4><span class="dot idle"></span> can we show a badge when a session needs me to approve <span class="tag">deck</span></h4>
+              <div class="sub2">~/code/session-deck &nbsp; ⎇ master &nbsp; ▬▬ 52%</div>
+            </div>
+            <div class="old-right">
+              <div class="old-seg">
+                <span class="pill is-on">Chat</span><span class="pill">Map</span><span class="pill">Timeline</span><span class="pill">Agents</span>
+              </div>
+              <span class="state">idle</span>
+              <div class="old-seg">
+                <span class="pill">4h ago</span>
+                <span class="pill">Ask me</span><span class="pill is-on">Auto-accept edits</span><span class="pill">Never ask</span>
+              </div>
+              <div class="old-seg"><span class="pill" style="color:#ff8f8f">Kill</span></div>
+            </div>
+          </div>
+        </div>
+        <div class="warn">Asked for "bypassPermissions", but this environment only allowed "acceptEdits". Permissions are still being enforced.</div>
+        <div class="body">
+          <div class="msg"><span class="role">claude</span><p>The conversation starts down here, 212 px from the edge.</p></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <h2>Three ways to win the screen back</h2>
+  <p class="lead">
+    All three fit in model and effort. What changes is where the things you
+    <b>read</b> live — path, branch, context, time — against the things you <b>touch</b>.
+  </p>
+
+  <div id="cases"></div>
+
+  <h2>What else deserves a button — and what does not</h2>
+  <p class="lead">
+    This is not a wish list: it is what the session really exposes live, read from
+    the SDK types. What is not there cannot be offered without making it
+    up.
+  </p>
+  <div class="ideas">
+    <div class="idea">
+      <h4><span class="yes">●</span> Model</h4>
+      <p>Changes live, without throwing away the turn in flight. The session itself gives the list, with a name and a description for each one.</p>
+      <span class="src">setModel() · supportedModels()</span>
+    </div>
+    <div class="idea">
+      <h4><span class="yes">●</span> Effort</h4>
+      <p>Also live. The levels depend on the model, so the list is rewritten when you change it.</p>
+      <span class="src">applyFlagSettings({ effortLevel })</span>
+    </div>
+    <div class="idea">
+      <h4><span class="yes">●</span> This session's commands</h4>
+      <p>Which <code>/commands</code> and skills it has loaded. Today you type them blind and you do not know which ones exist here. I would put it in the composer, not in the header: you use it by typing.</p>
+      <span class="src">supportedCommands()</span>
+    </div>
+    <div class="idea">
+      <h4><span class="maybe">●</span> The available subagents</h4>
+      <p>Which agents this session can launch, with their description. It is reading, not acting: it fits better in the <b>Agents</b> tab that already exists.</p>
+      <span class="src">supportedAgents()</span>
+    </div>
+    <div class="idea">
+      <h4><span class="maybe">●</span> MCP status</h4>
+      <p>Which ones connected and which ones are asking for authentication. There is already an MCP screen in Settings; in the header it would only be worth it as a warning when one fails.</p>
+      <span class="src">mcpServerStatus()</span>
+    </div>
+    <div class="idea">
+      <h4><span class="no">●</span> Token budget for the turn</h4>
+      <p>It sounds useful and I would not add it: the context meter already says the only actionable thing, and a second number in the same header competes with it without adding a decision you can make.</p>
+      <span class="src">—</span>
+    </div>
+  </div>
+
+  <h2>What I would implement</h2>
+  <div class="rec">
+    <ol>
+      <li><b>One row for what you touch, one thin line for what you read.</b> Name and
+      tabs on top; path, branch, context, model, effort, permissions and Kill in a
+      26 px strip. From 172 px down to ~70.</li>
+      <li><b>The session answers the model list, not the browser.</b>
+      <code>supportedModels()</code> returns the name, the description and the effort levels
+      of each one. A hand-written dropdown ages the day a model ships.</li>
+      <li><b>Picking a model rewrites the effort list.</b> Not all of them take the five
+      levels; offering one the model does not have is promising what will not be kept.</li>
+      <li><b>Asking is not getting, and it says so.</b> <code>max</code> is session-only and runs as
+      <code>high</code> on a model without support; an organization can also cap the level.
+      The chip shows what was granted and warns in amber when it is not what you asked for — the
+      same rule the deck already applies to the permission mode.</li>
+      <li><b>The permissions warning stops being a band.</b> It is the same sentence the chip
+      is already saying in amber; as a band it costs 40 permanent px.</li>
+    </ol>
+  </div>
+
+</div>
+
+<script>
+/*
+ * Models in the shape supportedModels() returns: value, displayName,
+ * description and supportedEffortLevels. The values are real, but the real
+ * list comes from the session -- this mockup carries it written out only so
+ * you can click on it.
+ */
+const MODELS = [
+  { value: 'opus', displayName: 'Opus 5', description: 'The most capable for long work', efforts: ['low','medium','high','xhigh','max'] },
+  { value: 'sonnet', displayName: 'Sonnet 5', description: 'Balance between cost and capability', efforts: ['low','medium','high','xhigh','max'] },
+  { value: 'haiku', displayName: 'Haiku 4.5', description: 'Fast and cheap, for simple tasks', efforts: [] },
+]
+const EFFORT_DESC = {
+  low: 'Fewer loops, less preamble. For the routine stuff.',
+  medium: 'The cheaper rung, when the quality holds up.',
+  high: 'The default balance.',
+  xhigh: 'What Claude Code uses to write code.',
+  max: 'When getting it right matters more than the cost.',
+}
+
+const state = { model: 'opus', effort: 'xhigh', perm: 'acceptEdits' }
+const PERMS = [
+  { id: 'default', label: 'Ask me', desc: 'Asks before anything your rules do not already allow' },
+  { id: 'acceptEdits', label: 'Auto-accept edits', desc: 'Writes files without asking; commands do still stop' },
+  { id: 'bypassPermissions', label: 'Never ask', desc: 'Everything without asking, commands included' },
+]
+
+const model = () => MODELS.find((m) => m.value === state.model)
+/* The granted effort, which is not always the requested one. */
+function granted() {
+  const m = model()
+  if (!m.efforts.length) return { level: null, capped: true, why: `${m.displayName} takes no effort levels` }
+  if (!m.efforts.includes(state.effort)) return { level: 'high', capped: true, why: `${m.displayName} does not take “${state.effort}”: it runs as high` }
+  return { level: state.effort, capped: false, why: '' }
+}
+
+function menu(title, items, foot) {
+  return `<div class="menu">
+    <div class="menu-title">${title}</div>
+    ${items}
+    ${foot ? `<div class="menu-foot">${foot}</div>` : ''}
+  </div>`
+}
+
+function modelChip() {
+  const items = MODELS.map((m) => `
+    <button data-set="model" data-value="${m.value}" class="${m.value === state.model ? 'is-on' : ''}">
+      ${m.displayName}<span class="desc">${m.description}</span>
+    </button>`).join('')
+  return `<span class="menu-wrap">
+    <button class="chip" data-menu="model"><span class="k">model</span><span class="v">${model().displayName}</span><span class="caret">▾</span></button>
+    ${menu('Model for this session', items, 'The session answers the list — <code>supportedModels()</code> — it is not written into the panel.')}
+  </span>`
+}
+
+function effortChip() {
+  const m = model()
+  const g = granted()
+  const all = ['low','medium','high','xhigh','max']
+  const items = all.map((e) => {
+    const ok = m.efforts.includes(e)
+    return `<button data-set="effort" data-value="${e}" ${ok ? '' : 'disabled'} class="${e === state.effort && ok ? 'is-on' : ''}">
+      ${e}<span class="desc">${ok ? EFFORT_DESC[e] : `${m.displayName} does not take it`}</span>
+    </button>`
+  }).join('')
+  const label = g.level || '—'
+  return `<span class="menu-wrap">
+    <button class="chip ${g.capped ? 'is-capped' : ''}" data-menu="effort" title="${g.why || ''}">
+      <span class="k">effort</span><span class="v">${label}</span><span class="caret">▾</span>
+    </button>
+    ${menu('Reasoning effort', items, g.capped && g.why ? `⚠ ${g.why}` : 'The chosen model sets which levels are available.')}
+  </span>`
+}
+
+function permChip() {
+  const cur = PERMS.find((p) => p.id === state.perm)
+  const items = PERMS.map((p) => `
+    <button data-set="perm" data-value="${p.id}" class="${p.id === state.perm ? 'is-on' : ''}">
+      ${p.label}<span class="desc">${p.desc}</span>
+    </button>`).join('')
+  return `<span class="menu-wrap">
+    <button class="chip" data-menu="perm"><span class="k">permissions</span><span class="v">${cur.label}</span><span class="caret">▾</span></button>
+    ${menu('What it can do without asking', items, 'You asked for <b>Never ask</b> and the environment granted <b>Auto-accept edits</b>.')}
+  </span>`
+}
+
+const TABS = `<div class="seg">
+  <button class="is-on">Chat</button><button>Map</button><button>Timeline</button><button>Agents</button>
+</div>`
+const CTX = `<span class="ctx"><span class="ctx-track"><span class="ctx-fill" style="width:52%"></span></span>52%</span>`
+const BODY = `<div class="body">
+    <div class="msg"><span class="role">claude</span><p>The conversation starts here. Every pixel the header does not spend is one more line of this.</p></div>
+    <div class="msg"><span class="role">you</span><p>And on a laptop screen, thirty pixels are two lines.</p></div>
+  </div>
+  <div class="composer"><input placeholder="Reply to this session..." readonly><button>Send</button></div>`
+
+const CASES = [
+  {
+    id: 'h1', title: 'H1 · Everything in one row', pick: false, alto: '~44 px',
+    desc: 'A single row: name on the left, and on the right the tabs and the chips. Path and branch move into the name tooltip.',
+    pros: ['As short as it gets: the conversation starts at 44 px.'],
+    cons: ['Path and branch stop being visible, and they are what tells two sessions of the same project apart.', 'With a long name, the chips get squeezed.'],
+    html: () => `<div class="pane">
+      <div class="head">
+        <div class="head-id"><span class="dot idle"></span><span class="name" title="~/code/session-deck ⎇ master">can we show a badge when a session needs me…</span><span class="tag">deck</span></div>
+        <div class="head-right">${TABS}${modelChip()}${effortChip()}${permChip()}<button class="chip is-danger">Kill</button></div>
+      </div>
+      ${BODY}</div>`,
+  },
+  {
+    id: 'h2', title: 'H2 · One row and one strip', pick: true, alto: '~70 px',
+    desc: 'On top, what you touch: name, tabs and the three chips. Below, a 26 px strip with what you only read — path, branch, context, time.',
+    pros: ['Everything visible today is kept, in 70 px instead of 172.', 'It separates touching from reading, which is the reason the right tower existed.', 'The thin strip takes one more fact the day it is needed, without growing again.'],
+    cons: ['It is still two rows: if a fact ever becomes surplus, it has to come off the strip.'],
+    html: () => `<div class="pane">
+      <div class="head">
+        <div class="head-id"><span class="dot idle"></span><span class="name">can we show a badge when a session needs me…</span><span class="tag">deck</span></div>
+        <div class="head-right">${TABS}${modelChip()}${effortChip()}${permChip()}<button class="chip is-danger">Kill</button></div>
+      </div>
+      <div class="detail">
+        <span class="path">~/code/session-deck</span>
+        <span class="branch">master</span>
+        ${CTX}
+        <span>4h ago</span>
+        <span class="state">idle</span>
+      </div>
+      ${BODY}</div>`,
+  },
+  {
+    id: 'h3', title: 'H3 · Status bar at the bottom', pick: false, alto: '~44 px on top',
+    desc: 'The header keeps the name and the tabs. Everything else drops to a status bar glued to the composer, like in an editor.',
+    pros: ['What you read sits next to where you type, which is where your eyes are.', 'The header cannot grow again: nothing else fits in it.'],
+    cons: ['Model and effort stop being where the permission mode is today: two places for three sibling settings.', 'On mobile it competes with the keyboard, which is exactly what covers that area.'],
+    html: () => `<div class="pane">
+      <div class="head">
+        <div class="head-id"><span class="dot idle"></span><span class="name">can we show a badge when a session needs me…</span><span class="tag">deck</span></div>
+        <div class="head-right">${TABS}<button class="chip is-danger">Kill</button></div>
+      </div>
+      ${BODY}
+      <div class="statusbar">
+        <span class="path">~/code/session-deck</span>
+        <span class="branch">master</span>
+        ${CTX}
+        <span class="grow"></span>
+        ${modelChip()}${effortChip()}${permChip()}
+      </div></div>`,
+  },
+]
+
+function paint() {
+  document.getElementById('cases').innerHTML = CASES.map((c) => `
+    <article class="case ${c.pick ? 'is-pick' : ''}">
+      <div class="case-head">
+        <h3>${c.title}${c.pick ? '<span class="tag-pick">proposal</span>' : ''}</h3>
+        <p>${c.desc}</p>
+      </div>
+      <div class="case-body">
+        <div class="ruler"><span>${c.alto}</span><i></i><span>today: 172 px</span></div>
+        ${c.html()}
+      </div>
+      <div class="note">
+        ${c.pros.map((t) => `<p class="pro">${t}</p>`).join('')}
+        ${c.cons.map((t) => `<p class="con">${t}</p>`).join('')}
+      </div>
+    </article>`).join('')
+}
+
+document.addEventListener('click', (e) => {
+  const opener = e.target.closest('[data-menu]')
+  const setter = e.target.closest('[data-set]')
+
+  if (setter) {
+    const key = setter.dataset.set
+    if (key === 'model') state.model = setter.dataset.value
+    if (key === 'effort') state.effort = setter.dataset.value
+    if (key === 'perm') state.perm = setter.dataset.value
+    paint()
+    return
+  }
+
+  const open = opener && opener.parentElement.querySelector('.menu')
+  const wasOpen = open && open.classList.contains('is-open')
+  document.querySelectorAll('.menu.is-open').forEach((m) => m.classList.remove('is-open'))
+  if (open && !wasOpen) { open.classList.add('is-open'); e.stopPropagation() }
+})
+
+paint()
+</script>
+</body>
+</html>

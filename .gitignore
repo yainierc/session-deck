@@ -1,0 +1,13 @@
+node_modules/
+dist/
+.DS_Store
+*.log
+
+# Claude Code personal settings: settings.json is meant to be shared, this one
+# is not.
+.claude/settings.local.json
+
+# The worktrees live inside the repo, which is where Claude Code puts them, and
+# they are not content: without this the first milestone that starts the roadmap
+# leaves the tree dirty and shows up as uncommitted work belonging to nobody.
+.claude/worktrees/

@@ -1,0 +1,1462 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Atlas — design v1</title>
+<style>
+/*
+ * Atlas — "all agents", visual proposal v1.  24 Sep 2026
+ *
+ * THE PROBLEM, TODAY
+ *
+ * The "All agents" screen (web/src/Atlas.jsx) is a grid of cards. Each card is
+ * a session with its file map and its counters, sorted by recent activity. It
+ * answers "what is each one touching?" well and answers nothing at all about
+ * "what are they saying to each other?".
+ *
+ * That wasn't a gap while sessions were independent. With six running across
+ * five projects and talking to each other over SendMessage, the grid has three
+ * concrete defects:
+ *
+ *   1. A card's position means nothing. It reorders by activity, so the card
+ *      you were watching moves on its own. You can't build muscle memory for a
+ *      grid that shuffles.
+ *   2. The project isn't visible. Two sessions from the same repo show up split
+ *      by a third from another repo if that third one was busier a minute ago.
+ *   3. Communication doesn't exist on the screen. It lives in Room, two clicks
+ *      away, and Room is pairwise: there is nowhere you see the whole.
+ *
+ * WHAT THIS MOCKUP DECIDES
+ *
+ * Three variants, animated and live so you can judge them moving. All three
+ * share four rules that are not up for discussion:
+ *
+ *   A. Color still means STATUS. Five projects do not fit in an accessible hue
+ *      set over #0c0e11 — palette.js only validates three. The project is
+ *      POSITION (group, lane, cluster), never color. It's the same decision
+ *      Room already made for its participants.
+ *   B. A message is not a status, so it doesn't take a status hue: it travels
+ *      in ink (--text) with a halo. In blue it would read as "busy".
+ *   C. Nothing inferred. A message with no recorded delivery is drawn truncated
+ *      and open-ended, the same way Room writes "no delivery recorded". You
+ *      don't close an arrow the transcripts don't close.
+ *   D. Zero dependencies. Everything that moves here is SVG + transform +
+ *      requestAnimationFrame, which is what FileMap.jsx already does. No
+ *      variant needs a graph library or an animation library.
+ *
+ * ON animations.dev
+ *
+ * It's not a library and not an installable skill: it's Emil Kowalski's paid
+ * course, and its "AI skills" live inside his platform. Enrollment is closed
+ * until 2027. What you can take from it is doctrine, and it's applied here:
+ * short durations (140-260 ms) for anything that answers a click and long ones
+ * (>1 s) only for ambient motion; ease-out (cubic-bezier(.2,.7,.3,1)) for
+ * everything that enters; nothing animates `top`/`left`, only transform and
+ * opacity; and prefers-reduced-motion kills the movement without killing the
+ * information. The one library that would be worth it if we ever want real
+ * springs is `motion` with LazyMotion (~5 kB), and none of the three variants
+ * asks for it.
+ *
+ * THE DATA
+ *
+ * The six agents, their names, their projects and their statuses are REAL,
+ * read from ~/.claude/sessions on 24 Sep 2026 at 22:30.
+ * The messages between them are INVENTED: these six sessions haven't talked to
+ * each other yet. It's the only fictional thing on the page, which is why it's
+ * said here and on screen too.
+ */
+
+:root {
+  /* Inherited from the deck, untouched. */
+  --bg: #0c0e11;
+  --panel: #14171c;
+  --panel-2: #1a1e25;
+  --line: #252a33;
+  --text: #e6e8eb;
+  --muted: #8b94a3;
+  --dim: #626c7d;
+  --accent: #4c8dff;
+  --waiting: #f0a83c;
+  --busy: #4c8dff;
+  --idle: #3fb950;
+  --shell: #a371f7;
+  --unknown: #626c7d;
+  --critical: #d03b3b;
+  --radius: 8px;
+
+  --hair: rgba(255,255,255,0.07);
+  --spine: rgba(255,255,255,0.10);
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+
+  /* Ease-out: fast at the start, settles at the end. */
+  --ease: cubic-bezier(.2,.7,.3,1);
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background:
+    radial-gradient(1200px 600px at 50% -220px, rgba(76,141,255,0.055), transparent 70%),
+    var(--bg);
+  color: var(--text);
+  font: 14px/1.55 ui-sans-serif, -apple-system, "Segoe UI", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+.stage { max-width: 1240px; margin: 0 auto; padding: 0 28px 140px; }
+
+/* ---------- header ---------- */
+
+.stage-head {
+  position: sticky; top: 0; z-index: 40;
+  padding: 22px 0 14px;
+  background: linear-gradient(var(--bg) 62%, rgba(12,14,17,0));
+  backdrop-filter: blur(6px);
+}
+.crumb {
+  font: 500 11px/1 var(--mono);
+  letter-spacing: .14em; text-transform: uppercase; color: var(--dim);
+  display: flex; align-items: center; gap: 9px; margin-bottom: 9px;
+}
+.crumb .sep { color: #333a45; }
+.stage-title { display: flex; align-items: baseline; gap: 13px; flex-wrap: wrap; }
+.stage-title h1 { margin: 0; font-size: 21px; font-weight: 600; letter-spacing: -0.02em; }
+.stage-meta { font: 12px/1 var(--mono); color: var(--muted); }
+.stage-meta b { color: var(--text); font-weight: 500; }
+
+/* ---------- intro and controls ---------- */
+
+.intro { max-width: 78ch; color: var(--muted); margin: 16px 0 4px; }
+.intro p { margin: 0 0 10px; }
+.intro b { color: var(--text); font-weight: 600; }
+.intro code {
+  font: 12px/1 var(--mono); color: var(--text);
+  background: var(--panel-2); border: 1px solid var(--line);
+  border-radius: 4px; padding: 2px 5px;
+}
+
+.warn {
+  display: flex; gap: 10px; align-items: flex-start;
+  margin: 14px 0 0; padding: 11px 14px;
+  border: 1px solid rgba(240,168,60,.28); border-left-width: 2px;
+  border-radius: var(--radius); background: rgba(240,168,60,.05);
+  font-size: 13px; color: var(--muted);
+}
+.warn b { color: var(--waiting); font-weight: 600; }
+
+.controls {
+  position: sticky; top: 74px; z-index: 30;
+  display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+  margin: 20px 0 10px; padding: 10px 12px;
+  background: rgba(20,23,28,.9); backdrop-filter: blur(8px);
+  border: 1px solid var(--line); border-radius: 10px;
+}
+.controls .label {
+  font: 500 10.5px/1 var(--mono); letter-spacing: .12em;
+  text-transform: uppercase; color: var(--dim); margin-right: 4px;
+}
+.tog {
+  appearance: none; cursor: pointer;
+  font: 500 12px/1 var(--mono); color: var(--muted);
+  background: var(--panel-2); border: 1px solid var(--line);
+  border-radius: 999px; padding: 7px 13px;
+  transition: color .14s var(--ease), border-color .14s var(--ease), background .14s var(--ease);
+}
+.tog:hover { color: var(--text); border-color: #333b47; }
+.tog.on { color: var(--text); border-color: rgba(76,141,255,.5); background: rgba(76,141,255,.1); }
+.controls .spacer { flex: 1 1 auto; }
+.controls .hint { font: 11px/1 var(--mono); color: var(--dim); }
+
+/* ---------- the variant ---------- */
+
+.variant {
+  margin: 34px 0 0;
+  border: 1px solid var(--line); border-radius: 12px;
+  background: linear-gradient(180deg, var(--panel-2), var(--panel));
+  overflow: hidden;
+}
+.variant.is-pick { border-color: rgba(76,141,255,.42); }
+
+.v-head { padding: 17px 20px 15px; border-bottom: 1px solid var(--hair); }
+.v-head h2 {
+  margin: 0; font-size: 16px; font-weight: 600; letter-spacing: -0.01em;
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+}
+.v-head .tag {
+  font: 500 10px/1 var(--mono); letter-spacing: .1em; text-transform: uppercase;
+  color: var(--accent); border: 1px solid rgba(76,141,255,.4);
+  border-radius: 999px; padding: 4px 9px;
+}
+.v-head .tag.alt { color: var(--dim); border-color: var(--line); }
+.v-head p { margin: 7px 0 0; color: var(--muted); font-size: 13px; max-width: 86ch; }
+
+.v-body { padding: 18px 20px 20px; position: relative; }
+
+.v-note {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 0 26px;
+  padding: 15px 20px 18px; border-top: 1px solid var(--hair);
+  background: rgba(0,0,0,.16);
+}
+.v-note p { margin: 0 0 7px; font-size: 12.5px; color: var(--muted); padding-left: 19px; position: relative; }
+.v-note p::before { position: absolute; left: 0; top: 0; font: 600 12px/1.5 var(--mono); }
+.v-note .pro::before { content: "+"; color: var(--idle); }
+.v-note .con::before { content: "−"; color: var(--waiting); }
+.v-note b { color: var(--text); font-weight: 600; }
+
+/* ---------- shared pieces ---------- */
+
+.dot { width: 7px; height: 7px; border-radius: 50%; background: var(--unknown); flex: none; }
+.dot-busy { background: var(--busy); }
+.dot-idle { background: var(--idle); }
+.dot-waiting { background: var(--waiting); animation: pulse 1.6s ease-in-out infinite; }
+.dot-shell { background: var(--shell); }
+@keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: .35 } }
+
+.legend {
+  display: flex; flex-wrap: wrap; gap: 6px 22px;
+  margin-top: 14px; padding-top: 13px; border-top: 1px dashed var(--line);
+  font-size: 12px; color: var(--dim);
+}
+.legend b { color: var(--muted); font-weight: 600; }
+.legend .swatch { display: inline-block; width: 18px; height: 2px; vertical-align: middle; margin-right: 5px; }
+
+svg { display: block; }
+svg text { font-family: var(--mono); }
+
+/* ------------------------------------------------------------------
+ * A · SCORE — lanes in time
+ * ------------------------------------------------------------------ */
+
+.score { display: grid; grid-template-columns: 252px 1fr; gap: 0; }
+
+.score-names { border-right: 1px solid var(--hair); padding-right: 14px; }
+
+.score-group { position: relative; padding-left: 13px; margin-bottom: 2px; }
+.score-group::before {
+  /* the project brace: the project is position, not color */
+  content: ""; position: absolute; left: 0; top: 6px; bottom: 6px;
+  width: 1px; background: var(--spine);
+}
+.score-group::after {
+  content: ""; position: absolute; left: 0; top: 6px; width: 5px; height: 1px; background: var(--spine);
+}
+.score-proj {
+  font: 500 10px/1 var(--mono); letter-spacing: .11em; text-transform: uppercase;
+  color: var(--dim); padding: 4px 0 3px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.score-row {
+  display: flex; align-items: center; gap: 8px;
+  height: 34px; cursor: pointer;
+  transition: background .14s var(--ease);
+  border-radius: 5px; padding: 0 6px; margin-left: -6px;
+}
+.score-row:hover { background: rgba(255,255,255,.035); }
+.score-row .nm {
+  font: 12px/1 var(--mono); color: var(--text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl;
+}
+.score-row .nm span { direction: ltr; unicode-bidi: embed; }
+/* the project is already in the brace above: in the name it's redundant */
+.score-row .pre { color: #3d4551; }
+.score-row.is-waiting .nm { color: var(--waiting); }
+.score-row .st {
+  margin-left: auto; flex: none; max-width: 92px;
+  font: 10px/1 var(--mono); color: var(--dim);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.score-row .st.is-status { letter-spacing: .06em; text-transform: uppercase; }
+.score-row .st.is-wait { color: var(--waiting); }
+.score-canvas { position: relative; overflow: hidden; }
+
+/* ------------------------------------------------------------------
+ * B · CONSTELLATION — clusters by project
+ * ------------------------------------------------------------------ */
+
+.sky { position: relative; }
+.sky-hint {
+  position: absolute; right: 4px; top: 2px; z-index: 2;
+  font: 11px/1 var(--mono); color: var(--dim);
+}
+
+/* ------------------------------------------------------------------
+ * C · LIVE GRID — today's cards, with wires
+ * ------------------------------------------------------------------ */
+
+.grid-wrap { position: relative; }
+.grid-wires {
+  position: absolute; inset: 0; pointer-events: none; z-index: 3;
+  overflow: visible;
+}
+.grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(214px, 1fr));
+  gap: 13px; position: relative; z-index: 1;
+}
+.gcard {
+  background: var(--panel); border: 1px solid var(--line);
+  border-radius: 10px; padding: 11px 12px 10px;
+  transition: border-color .2s var(--ease), box-shadow .2s var(--ease), transform .2s var(--ease);
+}
+.gcard.is-live { border-color: rgba(76,141,255,.45); }
+.gcard.is-hit {
+  border-color: rgba(230,232,235,.6);
+  box-shadow: 0 0 0 3px rgba(230,232,235,.08);
+  transform: translateY(-1px);
+}
+.gcard .gh { display: flex; align-items: center; gap: 7px; }
+.gcard .gn {
+  font: 600 12px/1 var(--mono);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.gcard .gp {
+  margin-top: 6px; font: 10.5px/1.3 var(--mono); color: var(--dim);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.gcard .gbars { display: flex; gap: 2px; align-items: flex-end; height: 34px; margin-top: 10px; }
+.gcard .gbars i {
+  flex: 1; background: var(--line); border-radius: 1px;
+  transition: height .4s var(--ease), background .4s var(--ease);
+}
+.gcard .gf {
+  display: flex; gap: 10px; margin-top: 9px;
+  font: 10.5px/1 var(--mono); color: var(--dim);
+}
+
+/* ---------- D · the file map ---------- */
+
+.fm-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(290px, 1fr)); gap: 16px; }
+.fm {
+  border: 1px solid var(--line); border-radius: 10px;
+  background: var(--panel); padding: 13px 14px 12px;
+}
+.fm.is-pick { border-color: rgba(76,141,255,.45); }
+.fm h4 {
+  margin: 0 0 4px; font: 600 12px/1.3 var(--mono);
+  display: flex; align-items: center; gap: 8px;
+}
+.fm h4 .mini {
+  font: 500 9px/1 var(--mono); letter-spacing: .1em; text-transform: uppercase;
+  color: var(--dim); border: 1px solid var(--line); border-radius: 999px; padding: 3px 7px;
+}
+.fm.is-pick h4 .mini { color: var(--accent); border-color: rgba(76,141,255,.4); }
+.fm .sub { font-size: 11.5px; color: var(--dim); margin: 0 0 12px; min-height: 48px; }
+.fm .slot { height: 104px; background: rgba(0,0,0,.2); border-radius: 6px; overflow: hidden; }
+.fm .hot {
+  margin-top: 10px; font: 11px/1 var(--mono); color: var(--text);
+  display: flex; align-items: center; gap: 7px;
+}
+.fm .hot em { font-style: normal; color: var(--dim); }
+.fm .fcap {
+  margin-top: 8px; display: flex; gap: 12px;
+  font: 10.5px/1 var(--mono); color: var(--dim);
+}
+.fm .fcap .bad { color: var(--critical); }
+
+/* ---------- verdict ---------- */
+
+.verdict {
+  margin: 40px 0 0; padding: 20px 22px;
+  border: 1px solid rgba(76,141,255,.3); border-left-width: 2px;
+  border-radius: 12px; background: rgba(76,141,255,.045);
+}
+.verdict h2 { margin: 0 0 10px; font-size: 15px; font-weight: 600; }
+.verdict p { margin: 0 0 11px; color: var(--muted); max-width: 84ch; font-size: 13.5px; }
+.verdict p:last-child { margin-bottom: 0; }
+.verdict b { color: var(--text); font-weight: 600; }
+.verdict ol { margin: 0 0 11px; padding-left: 20px; color: var(--muted); font-size: 13.5px; }
+.verdict li { margin-bottom: 6px; }
+
+/* ---------- reduced motion ----------
+ * The toggle above paints this class so you can SEE the degradation without
+ * changing system settings. The real media query does the same.
+ */
+body.calm *, body.calm *::before, body.calm *::after {
+  animation-duration: .001ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: .001ms !important;
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .001ms !important;
+  }
+}
+
+@media (max-width: 900px) {
+  .v-note { grid-template-columns: 1fr; }
+  .score { grid-template-columns: 150px 1fr; }
+}
+</style>
+</head>
+<body>
+
+<div class="stage">
+
+  <header class="stage-head">
+    <div class="crumb">
+      <span>Deck</span><span class="sep">/</span>
+      <span>Screen</span><span class="sep">/</span>
+      <span>All agents</span>
+    </div>
+    <div class="stage-title">
+      <h1>Atlas — v1</h1>
+      <span class="stage-meta"><b>3</b> variants + <b>1</b> separate decision · <b>6</b> real agents · <b>5</b> projects</span>
+    </div>
+  </header>
+
+  <div class="intro">
+    <p>
+      Today <code>Atlas.jsx</code> is a grid of cards sorted by recent activity.
+      With six sessions across five projects talking to each other, that grid has three
+      defects: <b>position means nothing</b> (it reshuffles on its own, no muscle memory),
+      <b>the project isn't visible</b>, and <b>communication isn't there</b> — it lives in Room, which is pairwise.
+    </p>
+    <p>
+      The three variants below are live: a simulator is emitting messages so you can
+      judge them moving. All three share four rules: <b>color is status</b> and
+      <b>project is position</b> (five accessible hues over <code>#0c0e11</code> don't exist —
+      <code>palette.js</code> only validates three); a <b>message travels in ink</b>, not in a status
+      hue, so it doesn't read as "busy"; <b>nothing is inferred</b> — a message with no recorded
+      delivery is drawn truncated and open; and <b>zero dependencies</b>: SVG, <code>transform</code>
+      and <code>requestAnimationFrame</code>, the same thing <code>FileMap.jsx</code> already does.
+    </p>
+  </div>
+
+  <div class="warn">
+    <span>⚠</span>
+    <div>
+      <b>What's real and what isn't.</b> The six agents —name, project and status— come from
+      <code>~/.claude/sessions</code> on 24 Sep 2026 at 22:30. The messages between them are
+      <b>invented</b>: these sessions haven't talked to each other yet. It's the only fictional thing on the page.
+    </div>
+  </div>
+
+  <div class="controls">
+    <span class="label">Try</span>
+    <button class="tog on" id="tPlay">⏸ Pause</button>
+    <button class="tog" id="tMany">12 agents</button>
+    <button class="tog" id="tWait">One is waiting on you</button>
+    <button class="tog" id="tCalm">Reduced motion</button>
+    <button class="tog" id="tBurst">Burst of messages</button>
+    <span class="spacer"></span>
+    <span class="hint" id="clock">—</span>
+  </div>
+
+  <!-- ============================================================ A -->
+  <article class="variant is-pick">
+    <div class="v-head">
+      <h2>A · Score <span class="tag">proposal</span></h2>
+      <p>
+        One lane per agent, grouped by project with a brace on the left. Time runs left to right
+        and <b>"now" is the right edge</b>: everything slides into the past on its own. The lane
+        beats: <b>writes upward, reads downward</b> — density, not identity, which is what survives
+        sixty files. A message is an arc leaving the lane of whoever speaks and landing in the lane
+        of whoever listens; the horizontal is real time, so <b>one read instantly comes out nearly
+        vertical and one that sat four minutes in the queue comes out flat</b>. The arc doesn't
+        exaggerate latency: it shows it at the scale where it matters.
+      </p>
+    </div>
+    <div class="v-body">
+      <div class="score">
+        <div class="score-names" id="scoreNames"></div>
+        <div class="score-canvas" id="scoreCanvas"></div>
+      </div>
+      <div class="legend">
+        <span><span class="swatch" style="background:var(--text)"></span><b>Arc</b> = a message, crossing</span>
+        <span><b>Flat arc</b> = took a while to be read</span>
+        <span><b>Open end</b> = no recorded delivery</span>
+        <span><b>Up</b> = writes · <b>down</b> = reads</span>
+        <span><span class="swatch" style="background:var(--critical)"></span><b>Red</b> = a tool failed</span>
+        <span><b>Brace</b> = project</span>
+      </div>
+    </div>
+    <div class="v-note">
+      <div>
+        <p class="pro"><b>Position is stable.</b> The order is project and then name, never activity: the row you were watching is still where it was ten minutes from now.</p>
+        <p class="pro"><b>It answers both questions at once</b> — what each one is doing (its trace) and what they're saying (the arcs) — without switching screens.</p>
+        <p class="pro"><b>Time is real.</b> A long gap looks like a long gap; a fast ping-pong looks tight. And delivery latency reads without reading a single number.</p>
+        <p class="pro"><b>It scales.</b> Twelve agents are twelve 34 px rows. Try it with the toggle.</p>
+      </div>
+      <div>
+        <p class="con"><b>You only see the window.</b> Ten minutes; anything before that is gone. It needs a zoom or a "see the whole session" the mockup doesn't draw.</p>
+        <p class="con"><b>The "where" is reduced to a folder.</b> The trace says how much and of what kind; per-file detail moves to the session view. See section D — it's a deliberate loss, but it's a loss.</p>
+        <p class="con"><b>The arcs cross</b> when non-adjacent lanes talk. Six holds up; at twenty you'd have to kill old arcs sooner.</p>
+        <p class="con"><b>Only one message is labeled at a time.</b> With three in flight the captions collide, so the most recent gets the label and the rest stay as arcs. Everything else is a hover away.</p>
+      </div>
+    </div>
+  </article>
+
+  <!-- ============================================================ B -->
+  <article class="variant">
+    <div class="v-head">
+      <h2>B · Constellation <span class="tag alt">alternative</span></h2>
+      <p>
+        Each agent is a node; those from the same project form a cluster. Lines exist only between
+        pairs that <b>have actually talked</b>, and their thickness is how many times. When a message
+        goes out, a dot of ink runs along it. The node's halo beats while it works.
+      </p>
+    </div>
+    <div class="v-body">
+      <div class="sky">
+        <span class="sky-hint">topology, not chronology</span>
+        <div id="skyCanvas"></div>
+      </div>
+      <div class="legend">
+        <span><span class="swatch" style="background:var(--spine)"></span><b>Line</b> = they've talked</span>
+        <span><b>Thickness</b> = how many times</span>
+        <span><b>Dot</b> = message in flight</span>
+        <span><b>Halo</b> = working</span>
+        <span><b>Cluster</b> = project</span>
+      </div>
+    </div>
+    <div class="v-note">
+      <div>
+        <p class="pro"><b>The topology jumps out</b> in a second: who's the hub, who talks to everyone, who's isolated.</p>
+        <p class="pro"><b>Deterministic positions.</b> No physics: the cluster is computed from the project, so it doesn't jitter or reorder between polls.</p>
+        <p class="pro"><b>It's the one that reads best from a distance</b>, on a monitor off to the side, without reading.</p>
+      </div>
+      <div>
+        <p class="con"><b>There's no time.</b> You see that they talk, not when or in what order. For supervising, "when" is usually the question.</p>
+        <p class="con"><b>A node fits very little text.</b> You lose path, counters and detailed status; all of it moves to hover.</p>
+        <p class="con"><b>With two agents it's ridiculous</b> and with fifteen it's a tangle. The useful window is narrow.</p>
+        <p class="con"><b>It's the prettiest and the least answering.</b> That is exactly the risk.</p>
+      </div>
+    </div>
+  </article>
+
+  <!-- ============================================================ C -->
+  <article class="variant">
+    <div class="v-head">
+      <h2>C · Live grid <span class="tag alt">minimum change</span></h2>
+      <p>
+        Today's cards, but <b>sorted by project and frozen</b> (no more reshuffling), with wires
+        drawn on top when a message flies. The receiving card lights up.
+      </p>
+    </div>
+    <div class="v-body">
+      <div class="grid-wrap">
+        <div class="grid" id="gridCards"></div>
+        <svg class="grid-wires" id="gridWires"></svg>
+      </div>
+      <div class="legend">
+        <span><b>Wire</b> = message in flight</span>
+        <span><b>Light border</b> = just received</span>
+        <span><b>Bars</b> = files per minute</span>
+        <span><b>Order</b> = project, fixed</span>
+      </div>
+    </div>
+    <div class="v-note">
+      <div>
+        <p class="pro"><b>It's the cheapest change.</b> It keeps the file map, the counters and all the CSS that already exists.</p>
+        <p class="pro"><b>It fixes the worst defect for free</b> — the reshuffling — just by changing the sort criterion.</p>
+        <p class="pro"><b>Every card stays clickable and dense.</b> Nothing is lost.</p>
+      </div>
+      <div>
+        <p class="con"><b>The wire measures nothing.</b> Its length is where the cards happened to land in the grid, not latency or real distance. It's decoration pretending to be data.</p>
+        <p class="con"><b>The message only exists while it flies.</b> If you weren't looking, it didn't happen: no trace is left.</p>
+        <p class="con"><b>When the grid wraps</b>, the wires cross the whole screen and turn into noise.</p>
+      </div>
+    </div>
+  </article>
+
+  <!-- ============================================================ D -->
+  <article class="variant">
+    <div class="v-head">
+      <h2>D · What to do with the file map <span class="tag alt">separate decision</span></h2>
+      <p>
+        Today's <code>FileMap</code> is a treemap: one rectangle per file, grouped by folder. It
+        works with fifteen files and falls apart at sixty, which is the normal case ten minutes
+        into the work. The failure isn't about size, <b>it's about the question</b>: the treemap
+        answers "which one?" by drawing identities, and on the all-agents screen the question is
+        never "which one?" — it's <b>"is it still moving, and is it reading or changing things?"</b>.
+        Three ways to answer it, from most to least information per pixel.
+      </p>
+    </div>
+    <div class="v-body">
+      <div class="fm-row" id="fmRow"></div>
+      <div class="legend">
+        <span><b>Same data</b> in all three: 58 files, 9 writes, 1 failure</span>
+        <span><b>Same width</b>: 260 px</span>
+      </div>
+    </div>
+    <div class="v-note">
+      <div>
+        <p class="pro"><b>D2 is the proposal</b> — the two-sided beat. It scales without limit because it doesn't draw files, it draws density: sixty and six hundred look equally good.</p>
+        <p class="pro"><b>It separates the one thing that decides whether you need to look.</b> Reading is cheap and breaks nothing; writing does. Today both are the same gray rectangle.</p>
+        <p class="pro"><b>It leaves room for failure.</b> A full-height red mark is visible from across the desk, and <code>--critical</code> is reserved for exactly this.</p>
+        <p class="pro"><b>And it recovers the cheap "where":</b> one line of text with the hot folder (<code>bicep/modules/</code>) says more than sixty unlabeled rectangles, and it never degrades.</p>
+      </div>
+      <div>
+        <p class="con"><b>D1 (today's treemap) isn't thrown out, it moves.</b> Inside a session, with a single session to look at, it does answer "which one?" and that's where it belongs.</p>
+        <p class="con"><b>D3 (sparkline) is too little.</b> It fits anywhere and doesn't tell reading from writing, which is exactly the distinction needed. It works for a sidebar row, not for this screen.</p>
+        <p class="con"><b>"Hot folder" needs a rule.</b> With the work split evenly across three folders, picking one lies. The honest rule is to show it only if it's over 40&nbsp;% of the last minute's events, and otherwise show nothing.</p>
+      </div>
+    </div>
+  </article>
+
+  <div class="verdict">
+    <h2>Verdict — A, with C as a first step</h2>
+    <p>
+      <b>A (Score) is the proposal.</b> It's the only one of the three where the geometry is data:
+      the vertical is who, the horizontal is when, the arc's length is delivery latency and the
+      open end is the absence of an acknowledgment. The other two animate on top of arbitrary
+      positions — pretty, but the movement doesn't inform.
+    </p>
+    <p>
+      <b>B (Constellation) isn't discarded, it's subordinated:</b> it's a good second mode for the
+      same screen ("topology" next to "chronology"), and it shares the whole data model. It doesn't
+      deserve to be the default view because it doesn't answer "when", which is the supervisor's question.
+    </p>
+    <p>
+      <b>C (Live grid) contains one improvement worth taking even if A wins:</b> sort by project and
+      stop reshuffling. That's three lines in <code>Atlas.jsx</code> and it can be done today.
+    </p>
+    <p>
+      <b>D is a decision independent of the three:</b> the per-file treemap falls apart at sixty
+      files and it falls apart because it answers the wrong question for this screen. Swapping it
+      for the two-sided beat —writes up, reads down, failure in red— plus one line with the hot
+      folder <b>improves all three variants equally</b>, including today's grid if nothing else ends
+      up changing. The treemap isn't thrown out: it stays inside the session view, which is where
+      "which file?" is the question.
+    </p>
+    <p>
+      None of this needs new data. The lanes and the traces come from <code>/api/activity</code>,
+      which already exists; the arcs come from <code>/api/meetings</code> (<code>src/meeting.js</code>), which already
+      returns <code>from</code>, <code>to</code>, <code>at</code>, <code>deliveredAt</code>,
+      <code>summary</code> and <code>hops</code> — exactly the five fields A draws. The one missing
+      piece is an aggregate endpoint: today Room serves conversations by pair and this screen wants
+      every turn from the last N minutes in a single response.
+    </p>
+  </div>
+
+</div>
+
+<script>
+/* =====================================================================
+ * Data
+ * ===================================================================== */
+
+/* Real: ~/.claude/sessions, 24 Sep 2026 22:30. */
+var AGENTS = [
+  { id: 'f7', name: 'session-deck-f7',      project: 'session-deck',     status: 'busy' },
+  { id: 'ed', name: 'github-acmeplatform-ed',   project: 'GITHUB-AcmePlatform',  status: 'busy' },
+  { id: '2f', name: 'github-acmeplatform-2f',   project: 'GITHUB-AcmePlatform',  status: 'idle' },
+  { id: 'pi', name: 'github-acmepilot-2f',     project: 'GITHUB-AcmePilot',    status: 'idle' },
+  { id: 'pa', name: 'github-acmepayments-d3',  project: 'GITHUB-AcmePayments', status: 'idle' },
+  { id: 'ss', name: 'github-acmeselfserve-33', project: 'GITHUB-AcmeSelfServe',status: 'idle' }
+]
+
+/* The six extras, for the scale toggle. Invented, obviously. */
+var EXTRA = [
+  { id: 'x1', name: 'github-acmeplatform-9c',   project: 'GITHUB-AcmePlatform',  status: 'idle' },
+  { id: 'x2', name: 'github-acmepilot-b4',     project: 'GITHUB-AcmePilot',    status: 'busy' },
+  { id: 'x3', name: 'github-acmepilot-07',     project: 'GITHUB-AcmePilot',    status: 'idle' },
+  { id: 'x4', name: 'github-acmepayments-5a',  project: 'GITHUB-AcmePayments', status: 'shell' },
+  { id: 'x5', name: 'session-deck-3b',      project: 'session-deck',     status: 'idle' },
+  { id: 'x6', name: 'github-acmeselfserve-e1', project: 'GITHUB-AcmeSelfServe',status: 'busy' }
+]
+
+/* Traffic script. INVENTED — see the warning above.
+ * lag: ms it took to be delivered. null = no recorded delivery.
+ * Two lags are deliberately huge (150 s and 240 s): those are the ones that
+ * flatten the arc and show what it buys to make horizontal distance be time. */
+var SCRIPT = [
+  { from: 'f7', to: 'ed', lag: 4200,   s: 'The pipeline naming scheme does not validate' },
+  { from: 'ed', to: 'f7', lag: 9100,   s: 'Confirmed, the environment code is missing' },
+  { from: 'ed', to: '2f', lag: 150000, s: 'Do not touch bicep/ until I push the fix' },
+  { from: '2f', to: 'ed', lag: 15400,  s: 'On it, I am only in tests' },
+  { from: 'f7', to: 'pa', lag: null,   s: 'Is the refunds endpoint still on staging?' },
+  { from: 'f7', to: 'pi', lag: 6800,   s: 'I need the contract before I can close' },
+  { from: 'pi', to: 'f7', lag: 3300,   s: 'Pushed, check the contract-v2 branch' },
+  { from: 'ed', to: 'ss', lag: 240000, s: 'Login shares the same tenant' },
+  { from: 'ss', to: 'ed', lag: 5100,   s: 'Then the scope has to be versioned' },
+  { from: 'pa', to: 'f7', lag: 7400,   s: 'Yes, and the webhook changed shape' },
+  { from: '2f', to: 'f7', lag: null,   s: 'Blocked: I need your sign-off' },
+  { from: 'f7', to: 'ed', lag: 2100,   s: 'Merged. Run the pipeline again' }
+]
+
+/* Most-touched folder right now, per agent. In the real panel this comes from
+ * /api/activity, which already returns each event's path. */
+var HOT = {
+  f7: 'web/src/', ed: 'bicep/modules/', '2f': 'tests/', pi: 'src/contracts/',
+  pa: 'src/webhooks/', ss: 'src/auth/', x1: 'bicep/', x2: 'src/', x3: 'docs/',
+  x4: 'scripts/', x5: 'src/server.js', x6: 'src/'
+}
+
+var WINDOW_MS = 10 * 60 * 1000   // the score looks at ten minutes
+var ROW_H = 34
+var HEAD_H = 21                  // height of the project label
+
+/* =====================================================================
+ * Clock and simulator
+ *
+ * A single rAF loop for all three variants. `now` is simulated time, so pause
+ * really freezes instead of leaving CSS animations running loose.
+ * ===================================================================== */
+
+var playing = true
+var fmAt = 0
+var now = Date.now()
+var last = performance.now()
+var msgs = []          // { from, to, at, lag, s, seq }
+var seq = 0
+var scriptAt = 0
+var nextEmit = 0
+
+/* Ten minutes of history already happened, so it doesn't start on an empty screen. */
+function seedHistory() {
+  msgs = []
+  seq = 0
+  var t = now - WINDOW_MS + 40000
+  for (var i = 0; i < 9; i++) {
+    var spec = SCRIPT[i % SCRIPT.length]
+    msgs.push({ from: spec.from, to: spec.to, at: t, lag: spec.lag, s: spec.s, seq: seq++ })
+    t += 52000 + (i % 4) * 17000
+  }
+  scriptAt = 9
+  nextEmit = now + 2500
+}
+
+function emit(fast) {
+  var pool = live()
+  var spec = SCRIPT[scriptAt % SCRIPT.length]
+  scriptAt++
+  var ids = pool.map(function (a) { return a.id })
+  var from = ids.indexOf(spec.from) >= 0 ? spec.from : ids[(scriptAt * 3) % ids.length]
+  var to = ids.indexOf(spec.to) >= 0 ? spec.to : ids[(scriptAt * 5 + 1) % ids.length]
+  if (from === to) to = ids[(ids.indexOf(from) + 1) % ids.length]
+  var m = { from: from, to: to, at: now, lag: spec.lag, s: spec.s, seq: seq++ }
+  msgs.push(m)
+  /* outside the window a message is no longer drawn; it isn't kept */
+  msgs = msgs.filter(function (x) { return now - x.at < WINDOW_MS + 30000 })
+  fireSky(m)
+  fireGrid(m)
+  nextEmit = now + (fast ? 700 : 4200 + Math.random() * 4200)
+}
+
+/* Activity trace: deterministic per agent, so it doesn't flicker on repaint. */
+function trace(agent, t) {
+  var h = 0
+  for (var i = 0; i < agent.id.length; i++) h = (h * 31 + agent.id.charCodeAt(i)) | 0
+  var k = Math.floor(t / 6000) + h
+  var v = Math.abs(Math.sin(k * 12.9898) * 43758.5453) % 1
+  var gain = agent.status === 'busy' ? 1 : agent.status === 'shell' ? 0.5 : 0.22
+  return v * gain
+}
+
+/* The same beat, but split into read / write / failure.
+ *
+ * This split is the answer to "the file map is unreadable with many files": it
+ * stops counting WHICH file and starts counting WHAT KIND. A treemap of sixty
+ * rectangles can't be read; a two-sided density can, at any number of files,
+ * because it doesn't draw identities but quantity. And it separates the one
+ * distinction that really decides whether you have to look: reading is cheap,
+ * writing isn't. */
+function beat(agent, t) {
+  var h = 0
+  for (var i = 0; i < agent.id.length; i++) h = (h * 31 + agent.id.charCodeAt(i)) | 0
+  var k = Math.floor(t / 6000) + h
+  var r1 = Math.abs(Math.sin(k * 12.9898) * 43758.5453) % 1
+  var r2 = Math.abs(Math.sin(k * 78.233 + 4.1) * 24634.6345) % 1
+  var r3 = Math.abs(Math.sin(k * 31.7 + 9.3) * 17321.913) % 1
+  var gain = agent.status === 'busy' ? 1 : agent.status === 'shell' ? 0.5 : 0.22
+  return {
+    read: r1 * gain,
+    write: r2 < 0.38 ? (0.35 + r2) * gain : 0,   /* writing is rarer than reading */
+    /* rare on purpose: if the red shows up every twenty seconds it stops being
+     * an alarm and becomes texture */
+    fail: r3 > 0.995 && agent.status === 'busy'
+  }
+}
+
+/* =====================================================================
+ * Mockup state
+ * ===================================================================== */
+
+var many = false
+var oneWaiting = false
+
+function live() {
+  var list = many ? AGENTS.concat(EXTRA) : AGENTS.slice()
+  if (oneWaiting) {
+    list = list.map(function (a) {
+      return a.id === 'pa' ? { id: a.id, name: a.name, project: a.project, status: 'waiting' } : a
+    })
+  }
+  return list
+}
+
+/* Stable order: project (alphabetical) and then name. Never activity. */
+function grouped() {
+  var byProject = {}
+  live().forEach(function (a) { (byProject[a.project] = byProject[a.project] || []).push(a) })
+  return Object.keys(byProject).sort().map(function (p) {
+    return { project: p, agents: byProject[p].sort(function (x, y) { return x.name < y.name ? -1 : 1 }) }
+  })
+}
+
+var SVG = 'http://www.w3.org/2000/svg'
+function el(tag, attrs) {
+  var n = document.createElementNS(SVG, tag)
+  for (var k in attrs) n.setAttribute(k, attrs[k])
+  return n
+}
+
+/* =====================================================================
+ * A · SCORE
+ * ===================================================================== */
+
+var scoreNames = document.getElementById('scoreNames')
+var scoreCanvas = document.getElementById('scoreCanvas')
+var scoreSvg = null
+var gTrace = null, gArc = null
+var laneY = {}     // id -> y inside the svg
+var traceT0 = 0    // time anchor of the trace layer
+var scoreW = 700
+var PAD_R = 16
+
+/* The score is drawn in two layers for a cost reason: the traces are ~100
+ * marks per lane and repainting them at 60 fps is a thousand nodes per frame.
+ * They're built once against a time anchor and after that they're only
+ * TRANSLATED, which is the one thing the compositor can do for free. The arcs,
+ * which are a dozen, are rebuilt every frame because they change shape. */
+
+function buildScore() {
+  var groups = grouped()
+  laneY = {}
+
+  /* name column */
+  scoreNames.innerHTML = ''
+  var y = 0
+  groups.forEach(function (g) {
+    var box = document.createElement('div')
+    box.className = 'score-group'
+    var h = document.createElement('div')
+    h.className = 'score-proj'
+    h.textContent = g.project
+    box.appendChild(h)
+    y += HEAD_H
+    g.agents.forEach(function (a) {
+      var row = document.createElement('div')
+      row.className = 'score-row' + (a.status === 'waiting' ? ' is-waiting' : '')
+      /* the project prefix is dimmed: the brace above already says it */
+      var pre = a.project.toLowerCase() + '-'
+      var nm = a.name.toLowerCase().indexOf(pre) === 0
+        ? '<span class="pre">' + a.name.slice(0, pre.length) + '</span>' + a.name.slice(pre.length)
+        : a.name
+      /* While it works, the gap on the right is worth more for WHERE than for
+       * repeating a status the colored dot has already said. */
+      var right = a.status === 'waiting'
+        ? '<span class="st is-wait">waiting on you</span>'
+        : a.status === 'busy'
+          ? '<span class="st">' + (HOT[a.id] || '') + '</span>'
+          : '<span class="st is-status">' + a.status + '</span>'
+      row.innerHTML =
+        '<span class="dot dot-' + a.status + '"></span>' +
+        '<span class="nm"><span>' + nm + '</span></span>' + right
+      box.appendChild(row)
+      laneY[a.id] = y + ROW_H / 2
+      y += ROW_H
+    })
+    y += 2
+    scoreNames.appendChild(box)
+  })
+
+  scoreCanvas.innerHTML = ''
+  scoreW = scoreCanvas.clientWidth || 700
+  var H = y + 26
+  scoreSvg = el('svg', { width: '100%', height: H, viewBox: '0 0 ' + scoreW + ' ' + H })
+  scoreCanvas.appendChild(scoreSvg)
+
+  /* Static layer: the lanes and the time grid never move — they're anchored to
+   * "now", which is always the same pixel. */
+  Object.keys(laneY).forEach(function (id) {
+    scoreSvg.appendChild(el('line', {
+      x1: 0, y1: laneY[id], x2: scoreW, y2: laneY[id],
+      stroke: 'rgba(255,255,255,.055)', 'stroke-width': 1
+    }))
+  })
+  for (var m = 0; m <= 10; m += 2) {
+    var gx = PAD_R + (scoreW - PAD_R * 2) * (1 - m * 60000 / WINDOW_MS)
+    scoreSvg.appendChild(el('line', {
+      x1: gx, y1: 4, x2: gx, y2: H - 22, stroke: 'rgba(255,255,255,.045)', 'stroke-width': 1
+    }))
+    var lab = el('text', {
+      x: gx, y: H - 8, fill: '#626c7d', 'font-size': 9.5,
+      'text-anchor': m === 0 ? 'end' : 'middle'
+    })
+    lab.textContent = m === 0 ? 'now' : '−' + m + ' min'
+    scoreSvg.appendChild(lab)
+  }
+
+  gTrace = el('g', {})
+  gArc = el('g', {})
+  scoreSvg.appendChild(gTrace)
+  scoreSvg.appendChild(gArc)
+  buildTraces()
+}
+
+/* Anchors the trace layer to the current instant and builds it with slack on
+ * the right, so that as it slides there are still marks left to come in. */
+function buildTraces() {
+  if (!gTrace) return
+  while (gTrace.firstChild) gTrace.removeChild(gTrace.firstChild)
+  traceT0 = now
+  var span = scoreW - PAD_R * 2
+  var x0 = function (t) { return PAD_R + span * (1 - (traceT0 - t) / WINDOW_MS) }
+  live().forEach(function (agent) {
+    var yy = laneY[agent.id]
+    if (yy === undefined) return
+    var color = agent.status === 'busy' ? '#4c8dff'
+      : agent.status === 'waiting' ? '#f0a83c'
+      : agent.status === 'shell' ? '#a371f7'
+      : agent.status === 'idle' ? '#3fb950' : '#626c7d'
+    for (var t = traceT0 - WINDOW_MS; t < traceT0 + 40000; t += 6000) {
+      var b = beat(agent, t)
+      var tx = x0(t)
+      /* read: downward, faint. It's the background, not the news. */
+      if (b.read >= 0.1) {
+        var hr = 2 + b.read * 8
+        gTrace.appendChild(el('rect', {
+          x: tx - 1.1, y: yy + 1, width: 2.2, height: hr, rx: 1,
+          fill: color, opacity: 0.14 + b.read * 0.2
+        }))
+      }
+      /* write: upward, solid. It's what changes the repo. */
+      if (b.write > 0) {
+        var hw = 3 + b.write * 12
+        gTrace.appendChild(el('rect', {
+          x: tx - 1.3, y: yy - 1 - hw, width: 2.6, height: hw, rx: 1,
+          fill: color, opacity: 0.55 + b.write * 0.4
+        }))
+      }
+      /* failure: reserved red, and always above everything else */
+      if (b.fail) {
+        gTrace.appendChild(el('rect', {
+          x: tx - 1.4, y: yy - 11, width: 2.8, height: 22, rx: 1.4, fill: '#d03b3b', opacity: 0.92
+        }))
+      }
+    }
+  })
+}
+
+function drawScore() {
+  if (!scoreSvg) return
+  var W = scoreW
+  var span = W - PAD_R * 2
+  var x = function (t) { return PAD_R + span * (1 - (now - t) / WINDOW_MS) }
+
+  /* the trace layer only slides; it's rebuilt every 30 s of simulated clock */
+  if (now - traceT0 > 30000) buildTraces()
+  gTrace.setAttribute('transform', 'translate(' + (-(now - traceT0) / WINDOW_MS * span) + ',0)')
+
+  while (gArc.firstChild) gArc.removeChild(gArc.firstChild)
+
+  /* Only the most recent in-flight message carries a caption. With three
+   * crossing at once the labels collide and none of them reads; labeling one
+   * and leaving the others as arcs is worse information but better reading,
+   * and the rest is a hover away. */
+  var topFlying = null
+  msgs.forEach(function (m) {
+    var lg = m.lag === null ? 9000 : m.lag
+    if (now - m.at < lg && (!topFlying || m.at > topFlying.at)) topFlying = m
+  })
+
+  /* arcs: a message crossing from one lane to another */
+  msgs.forEach(function (msg) {
+    if (laneY[msg.from] === undefined || laneY[msg.to] === undefined) return
+    var lag = msg.lag === null ? 9000 : msg.lag
+    var x1 = x(msg.at)
+    var x2 = x(msg.at + lag)
+    if (x2 < -30) return
+    /* a lag of zero would still be a visible arc: minimum 26 px */
+    if (x2 - x1 < 26) x2 = x1 + 26
+    var y1 = laneY[msg.from]
+    var y2 = laneY[msg.to]
+    var dx = Math.max(26, (x2 - x1)) * 0.45
+
+    var p = el('path', {
+      d: 'M' + x1 + ' ' + y1 + ' C' + (x1 + dx) + ' ' + y1 + ', ' + (x2 - dx) + ' ' + y2 + ', ' + x2 + ' ' + y2,
+      fill: 'none', stroke: '#e6e8eb', 'stroke-width': 1.3, 'stroke-linecap': 'round'
+    })
+    gArc.appendChild(p)
+
+    var L = p.getTotalLength()
+    var age = now - msg.at
+    var prog = Math.max(0, Math.min(1, age / lag))
+    var flying = prog < 1
+    /* the arc draws itself during delivery */
+    var shown = msg.lag === null ? Math.min(prog, 0.62) : prog
+    p.setAttribute('stroke-dasharray', L)
+    p.setAttribute('stroke-dashoffset', L * (1 - shown))
+    /* and then it fades with age, without disappearing: the trail is the record */
+    var faded = flying ? 0.95 : Math.max(0.16, 0.95 - (age - lag) / WINDOW_MS * 1.5)
+    p.setAttribute('opacity', faded)
+    if (!flying) p.setAttribute('stroke-width', 1)
+
+    /* departure: filled dot in the lane of whoever speaks */
+    gArc.appendChild(el('circle', {
+      cx: x1, cy: y1, r: 2.6, fill: '#e6e8eb', opacity: faded
+    }))
+
+    if (flying) {
+      /* in-flight head, with halo */
+      var pt = p.getPointAtLength(L * shown)
+      gArc.appendChild(el('circle', { cx: pt.x, cy: pt.y, r: 7, fill: '#e6e8eb', opacity: 0.1 }))
+      gArc.appendChild(el('circle', { cx: pt.x, cy: pt.y, r: 3, fill: '#e6e8eb' }))
+      /* the caption rides along with the message as it crosses, and flips
+       * before running off the right edge instead of being clipped */
+      if (msg === topFlying) {
+        /* mono at 10 px is ~5.4 px per character: enough to know if it fits */
+        var flip = pt.x + 12 + msg.s.length * 5.4 > W
+        var cap = el('text', {
+          x: pt.x + (flip ? -10 : 10), y: pt.y - 8, 'text-anchor': flip ? 'end' : 'start',
+          fill: '#e6e8eb', 'font-size': 10, opacity: 0.9,
+          /* outline in the background color: the caption reads over the trace
+           * without having to paint a box behind it */
+          stroke: '#0c0e11', 'stroke-width': 3.2, 'paint-order': 'stroke'
+        })
+        cap.textContent = msg.s
+        gArc.appendChild(cap)
+      }
+    } else if (msg.lag === null) {
+      /* nothing inferred an arrival: open end, and it says so */
+      var ep = p.getPointAtLength(L * 0.62)
+      gArc.appendChild(el('circle', {
+        cx: ep.x, cy: ep.y, r: 3.4, fill: 'none', stroke: '#f0a83c', 'stroke-width': 1.2, opacity: faded + 0.2
+      }))
+    } else {
+      /* arrival: hollow dot in the lane of whoever listens */
+      gArc.appendChild(el('circle', {
+        cx: x2, cy: y2, r: 2.6, fill: '#0c0e11', stroke: '#e6e8eb', 'stroke-width': 1.2, opacity: faded
+      }))
+    }
+  })
+}
+
+/* =====================================================================
+ * B · CONSTELLATION
+ * ===================================================================== */
+
+var skyCanvas = document.getElementById('skyCanvas')
+var skySvg = null
+var node = {}        // id -> {x,y}
+var flights = []     // { from, to, born }
+
+function buildSky() {
+  skyCanvas.innerHTML = ''
+  var W = skyCanvas.clientWidth || 1000
+  var H = many ? 400 : 330
+  skySvg = el('svg', { width: '100%', height: H, viewBox: '0 0 ' + W + ' ' + H })
+  skyCanvas.appendChild(skySvg)
+
+  /* Deterministic positions: the cluster comes from the project, not physics.
+   * No force simulation, so it doesn't jitter between repaints. */
+  var groups = grouped()
+  var cx = W / 2, cy = H / 2
+  var rx = W * 0.34, ry = H * 0.33
+  node = {}
+  groups.forEach(function (g, gi) {
+    var ang = -Math.PI / 2 + (gi / groups.length) * Math.PI * 2
+    var gx = cx + Math.cos(ang) * rx
+    var gy = cy + Math.sin(ang) * ry
+    /* Inside the cluster, members spread along the perpendicular to the radius
+     * with a gap in PIXELS, not in angle: angle makes two nodes of a distant
+     * cluster stick together and their labels collide. */
+    var n = g.agents.length
+    var perp = ang + Math.PI / 2
+    var gapPx = many ? 68 : 84
+    g.agents.forEach(function (a, ai) {
+      var off = (ai - (n - 1) / 2) * gapPx
+      node[a.id] = {
+        x: gx + Math.cos(perp) * off,
+        y: gy + Math.sin(perp) * off,
+        ang: ang, idx: ai
+      }
+    })
+  })
+}
+
+function fireSky(m) { flights.push({ from: m.from, to: m.to, born: now, s: m.s }) }
+
+function skyPath(a, b) {
+  /* slight curve away from the center, so out and back don't overlap */
+  var mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2
+  var dx = b.x - a.x, dy = b.y - a.y
+  var k = 0.13
+  return 'M' + a.x + ' ' + a.y + ' Q' + (mx - dy * k) + ' ' + (my + dx * k) + ' ' + b.x + ' ' + b.y
+}
+
+function drawSky() {
+  if (!skySvg) return
+  while (skySvg.firstChild) skySvg.removeChild(skySvg.firstChild)
+  var list = live()
+
+  /* edges: only between pairs that actually talked */
+  var weight = {}
+  msgs.forEach(function (m) {
+    if (!node[m.from] || !node[m.to]) return
+    var k = m.from < m.to ? m.from + '|' + m.to : m.to + '|' + m.from
+    weight[k] = (weight[k] || 0) + 1
+  })
+  Object.keys(weight).forEach(function (k) {
+    var ab = k.split('|')
+    var p = el('path', {
+      d: skyPath(node[ab[0]], node[ab[1]]),
+      fill: 'none', stroke: 'rgba(255,255,255,.13)',
+      'stroke-width': Math.min(3, 0.7 + weight[k] * 0.4), 'stroke-linecap': 'round'
+    })
+    skySvg.appendChild(p)
+  })
+
+  /* nodes */
+  list.forEach(function (a) {
+    var n = node[a.id]
+    if (!n) return
+    var color = a.status === 'busy' ? '#4c8dff'
+      : a.status === 'waiting' ? '#f0a83c'
+      : a.status === 'shell' ? '#a371f7'
+      : a.status === 'idle' ? '#3fb950' : '#626c7d'
+
+    if (a.status === 'busy' || a.status === 'waiting') {
+      /* halo: it breathes, on the simulated clock so that pause stops it */
+      var ph = (now % 2000) / 2000
+      var r = 12 + ph * 14
+      skySvg.appendChild(el('circle', {
+        cx: n.x, cy: n.y, r: r, fill: 'none', stroke: color,
+        'stroke-width': 1, opacity: 0.3 * (1 - ph)
+      }))
+    }
+    skySvg.appendChild(el('circle', { cx: n.x, cy: n.y, r: 9, fill: '#14171c', stroke: color, 'stroke-width': 1.6 }))
+    skySvg.appendChild(el('circle', { cx: n.x, cy: n.y, r: 3.4, fill: color }))
+
+    /* The label goes outside the cluster — below if the cluster is below — and
+     * neighbors are staggered vertically so they don't overlap. The name drops
+     * the project prefix because the project goes right underneath: the same
+     * decision as in the lanes. */
+    var below = Math.sin(n.ang) >= -0.2
+    var stair = (n.idx % 2) * 32
+    var ty = below ? n.y + 25 + stair : n.y - 17 - stair
+    var pre = a.project.toLowerCase() + '-'
+    var shortName = a.name.toLowerCase().indexOf(pre) === 0 ? a.name.slice(pre.length) : a.name
+    var t1 = el('text', {
+      x: n.x, y: ty, fill: '#e6e8eb', 'font-size': 11, 'text-anchor': 'middle',
+      stroke: '#0c0e11', 'stroke-width': 3, 'paint-order': 'stroke'
+    })
+    t1.textContent = shortName
+    skySvg.appendChild(t1)
+    var t2 = el('text', {
+      x: n.x, y: ty + 12, fill: '#626c7d', 'font-size': 9, 'text-anchor': 'middle',
+      stroke: '#0c0e11', 'stroke-width': 3, 'paint-order': 'stroke'
+    })
+    t2.textContent = a.project
+    skySvg.appendChild(t2)
+  })
+
+  /* messages in flight */
+  var FLY = 1400
+  flights = flights.filter(function (f) { return now - f.born < FLY && node[f.from] && node[f.to] })
+  flights.forEach(function (f) {
+    var p = el('path', { d: skyPath(node[f.from], node[f.to]), fill: 'none', stroke: 'none' })
+    skySvg.appendChild(p)
+    var L = p.getTotalLength()
+    var prog = (now - f.born) / FLY
+    /* ease-out: leaves fast and settles */
+    var e = 1 - Math.pow(1 - prog, 3)
+    var pt = p.getPointAtLength(L * e)
+    /* trail */
+    var tail = el('path', {
+      d: p.getAttribute('d'), fill: 'none', stroke: '#e6e8eb', 'stroke-width': 1.4,
+      'stroke-linecap': 'round', 'stroke-dasharray': L,
+      'stroke-dashoffset': L * (1 - e), opacity: 0.5 * (1 - prog) + 0.15
+    })
+    skySvg.appendChild(tail)
+    skySvg.appendChild(el('circle', { cx: pt.x, cy: pt.y, r: 8, fill: '#e6e8eb', opacity: 0.12 }))
+    skySvg.appendChild(el('circle', { cx: pt.x, cy: pt.y, r: 3.2, fill: '#e6e8eb' }))
+  })
+}
+
+/* =====================================================================
+ * C · LIVE GRID
+ * ===================================================================== */
+
+var gridCards = document.getElementById('gridCards')
+var gridWires = document.getElementById('gridWires')
+var wires = []
+
+function buildGrid() {
+  gridCards.innerHTML = ''
+  grouped().forEach(function (g) {
+    g.agents.forEach(function (a) {
+      var c = document.createElement('div')
+      c.className = 'gcard' + (a.status === 'busy' ? ' is-live' : '')
+      c.dataset.id = a.id
+      var bars = ''
+      for (var i = 0; i < 14; i++) bars += '<i></i>'
+      c.innerHTML =
+        '<div class="gh"><span class="dot dot-' + a.status + '"></span><span class="gn">' + a.name + '</span></div>' +
+        '<div class="gp">' + a.project + '</div>' +
+        '<div class="gbars">' + bars + '</div>' +
+        '<div class="gf"><span>' + (12 + (a.id.charCodeAt(0) % 30)) + ' files</span><span>' +
+        (a.id.charCodeAt(1) % 9) + ' changed</span></div>'
+      gridCards.appendChild(c)
+    })
+  })
+}
+
+function fireGrid(m) {
+  wires.push({ from: m.from, to: m.to, born: now })
+  var target = gridCards.querySelector('[data-id="' + m.to + '"]')
+  if (target) {
+    target.classList.add('is-hit')
+    setTimeout(function () { target.classList.remove('is-hit') }, 900)
+  }
+}
+
+function centerOf(id) {
+  var c = gridCards.querySelector('[data-id="' + id + '"]')
+  if (!c) return null
+  var a = c.getBoundingClientRect(), b = gridCards.getBoundingClientRect()
+  return { x: a.left - b.left + a.width / 2, y: a.top - b.top + a.height / 2 }
+}
+
+var barsAt = 0
+
+function drawGrid() {
+  var W = gridCards.clientWidth, H = gridCards.clientHeight
+  gridWires.setAttribute('viewBox', '0 0 ' + W + ' ' + H)
+  while (gridWires.firstChild) gridWires.removeChild(gridWires.firstChild)
+
+  /* The bars refresh four times a second, not sixty: that's 170 style writes
+   * and the CSS already interpolates between one and the next. */
+  if (now - barsAt > 250) {
+    barsAt = now
+    var pool = live()
+    Array.prototype.forEach.call(gridCards.children, function (c) {
+      var agent = pool.filter(function (a) { return a.id === c.dataset.id })[0]
+      if (!agent) return
+      Array.prototype.forEach.call(c.querySelectorAll('.gbars i'), function (bar, i) {
+        var v = trace(agent, now - (13 - i) * 20000)
+        bar.style.height = (10 + v * 88) + '%'
+        bar.style.background = v > 0.45 ? 'rgba(76,141,255,.55)' : 'rgba(255,255,255,.1)'
+      })
+    })
+  }
+
+  var FLY = 1200
+  wires = wires.filter(function (w) { return now - w.born < FLY })
+  wires.forEach(function (w) {
+    var a = centerOf(w.from), b = centerOf(w.to)
+    if (!a || !b) return
+    var mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2 - Math.abs(b.x - a.x) * 0.12 - 18
+    var d = 'M' + a.x + ' ' + a.y + ' Q' + mx + ' ' + my + ' ' + b.x + ' ' + b.y
+    var p = el('path', { d: d, fill: 'none', stroke: '#e6e8eb', 'stroke-width': 1.4, 'stroke-linecap': 'round' })
+    gridWires.appendChild(p)
+    var L = p.getTotalLength()
+    var prog = (now - w.born) / FLY
+    var e = 1 - Math.pow(1 - prog, 3)
+    p.setAttribute('stroke-dasharray', L * 0.32 + ' ' + L)
+    p.setAttribute('stroke-dashoffset', L * (0.32 - e * 1.32))
+    p.setAttribute('opacity', 0.9 * (1 - prog * prog))
+    var pt = p.getPointAtLength(Math.min(L, L * e))
+    gridWires.appendChild(el('circle', { cx: pt.x, cy: pt.y, r: 7, fill: '#e6e8eb', opacity: 0.12 * (1 - prog) }))
+    gridWires.appendChild(el('circle', { cx: pt.x, cy: pt.y, r: 3, fill: '#e6e8eb', opacity: 1 - prog * 0.6 }))
+  })
+}
+
+/* =====================================================================
+ * D · WHAT TO DO WITH THE FILE MAP
+ *
+ * The three thumbnails draw THE SAME data — 58 files, 9 writes, 1 failure —
+ * at the same width, so the comparison is about shape and not about how much
+ * room we give each one.
+ * ===================================================================== */
+
+var FOLDERS = [
+  { name: 'bicep/modules/', n: 18 }, { name: 'src/', n: 14 },
+  { name: 'tests/', n: 11 }, { name: '.github/workflows/', n: 7 },
+  { name: 'docs/', n: 5 }, { name: 'scripts/', n: 3 }
+]
+var fmRow = document.getElementById('fmRow')
+var fmSlots = {}
+
+function buildFm() {
+  fmRow.innerHTML = ''
+  var defs = [
+    { k: 'd1', tag: 'today', t: 'D1 · Treemap by file',
+      s: 'One rectangle per file, grouped by folder. It answers "which one?" — and at 58 files no label fits, so it no longer answers anything.' },
+    { k: 'd2', tag: 'proposal', pick: true, t: 'D2 · Two-sided beat',
+      s: 'Density over time: writes up, reads down, failure in full-height red. It doesn\'t draw files, so how many there are doesn\'t affect it.' },
+    { k: 'd3', tag: 'minimum', t: 'D3 · Sparkline',
+      s: 'A single line of intensity. It fits in any gap and doesn\'t tell reading from writing, which is exactly the distinction that was needed.' }
+  ]
+  defs.forEach(function (d) {
+    var box = document.createElement('div')
+    box.className = 'fm' + (d.pick ? ' is-pick' : '')
+    box.innerHTML =
+      '<h4>' + d.t + '<span class="mini">' + d.tag + '</span></h4>' +
+      '<p class="sub">' + d.s + '</p>' +
+      '<div class="slot"></div>' +
+      (d.k === 'd1'
+        ? '<div class="hot"><em>folder:</em> — <em>(the map already says it, illegibly)</em></div>'
+        : '<div class="hot"><em>folder:</em> bicep/modules/ <em>· 61 %</em></div>') +
+      '<div class="fcap"><span>58 files</span><span>9 changed</span><span class="bad">✕ 1 failed</span></div>'
+    fmRow.appendChild(box)
+    fmSlots[d.k] = box.querySelector('.slot')
+  })
+}
+
+function drawFm() {
+  var W = fmSlots.d1 ? fmSlots.d1.clientWidth : 260
+  var H = 104
+  if (!W) return
+
+  /* --- D1: slice-and-dice treemap, today's --- */
+  var s1 = el('svg', { width: '100%', height: H, viewBox: '0 0 ' + W + ' ' + H })
+  var total = 0
+  FOLDERS.forEach(function (f) { total += f.n })
+  var x = 0
+  FOLDERS.forEach(function (f, fi) {
+    var fw = (f.n / total) * W
+    var y = 0
+    for (var i = 0; i < f.n; i++) {
+      var h = H / f.n
+      var v = Math.abs(Math.sin((fi * 17 + i * 7.3) * 12.9898) * 43758.5453) % 1
+      /* the same single failure D2 shows, so the comparison is like for like */
+      var bad = fi === 1 && i === 9
+      s1.appendChild(el('rect', {
+        x: x + 1, y: y + 1, width: Math.max(0, fw - 2), height: Math.max(0, h - 2), rx: 1.5,
+        fill: bad ? '#d03b3b' : v > 0.82 ? '#4c8dff' : '#2b323c',
+        opacity: bad ? 0.85 : v > 0.82 ? 0.75 : 0.55 + v * 0.25
+      }))
+      y += h
+    }
+    /* the folder label: it only fits in two of the six */
+    if (fw > 62) {
+      var t = el('text', { x: x + 4, y: 11, fill: '#8b94a3', 'font-size': 8.5 })
+      t.textContent = f.name
+      s1.appendChild(t)
+    }
+    x += fw
+  })
+  fmSlots.d1.innerHTML = ''
+  fmSlots.d1.appendChild(s1)
+
+  /* --- D2: two-sided beat, the proposal --- */
+  var s2 = el('svg', { width: '100%', height: H, viewBox: '0 0 ' + W + ' ' + H })
+  var mid = H / 2
+  s2.appendChild(el('line', { x1: 0, y1: mid, x2: W, y2: mid, stroke: 'rgba(255,255,255,.09)', 'stroke-width': 1 }))
+  var demo = { id: 'fmdemo', status: 'busy' }
+  var N = Math.floor(W / 5)
+  for (var i = 0; i < N; i++) {
+    var t = now - (N - i) * 9000
+    var b = beat(demo, t)
+    var px = 3 + i * 5
+    if (b.read >= 0.1) {
+      s2.appendChild(el('rect', {
+        x: px, y: mid + 2, width: 2.6, height: 3 + b.read * 30, rx: 1.3,
+        fill: '#4c8dff', opacity: 0.2 + b.read * 0.2
+      }))
+    }
+    if (b.write > 0) {
+      s2.appendChild(el('rect', {
+        x: px - 0.2, y: mid - 2 - (4 + b.write * 36), width: 3, height: 4 + b.write * 36, rx: 1.4,
+        fill: '#4c8dff', opacity: 0.62 + b.write * 0.35
+      }))
+    }
+    /* one failure, in a fixed spot: the three panels draw the SAME datum */
+    if (i === Math.floor(N * 0.62)) {
+      s2.appendChild(el('rect', { x: px - 0.4, y: 6, width: 3.4, height: H - 12, rx: 1.7, fill: '#d03b3b', opacity: 0.9 }))
+    }
+  }
+  var lw = el('text', { x: 4, y: 11, fill: '#626c7d', 'font-size': 8.5 }); lw.textContent = 'writes'
+  var lr = el('text', { x: 4, y: H - 4, fill: '#626c7d', 'font-size': 8.5 }); lr.textContent = 'reads'
+  s2.appendChild(lw); s2.appendChild(lr)
+  fmSlots.d2.innerHTML = ''
+  fmSlots.d2.appendChild(s2)
+
+  /* --- D3: sparkline --- */
+  var s3 = el('svg', { width: '100%', height: H, viewBox: '0 0 ' + W + ' ' + H })
+  var pts = []
+  for (var j = 0; j < N; j++) {
+    var bb = beat(demo, now - (N - j) * 9000)
+    var v3 = Math.min(1, bb.read + bb.write)
+    pts.push((3 + j * 5) + ',' + (H - 10 - v3 * (H - 26)))
+  }
+  s3.appendChild(el('polyline', {
+    points: pts.join(' '), fill: 'none', stroke: '#4c8dff', 'stroke-width': 1.5,
+    'stroke-linejoin': 'round', 'stroke-linecap': 'round', opacity: 0.85
+  }))
+  s3.appendChild(el('line', { x1: 0, y1: H - 9, x2: W, y2: H - 9, stroke: 'rgba(255,255,255,.07)', 'stroke-width': 1 }))
+  fmSlots.d3.innerHTML = ''
+  fmSlots.d3.appendChild(s3)
+}
+
+/* =====================================================================
+ * Loop
+ * ===================================================================== */
+
+function rebuild() {
+  buildScore()
+  buildSky()
+  buildGrid()
+  buildFm()
+  drawFm()
+}
+
+function frame(ts) {
+  var dt = ts - last
+  last = ts
+  if (playing) {
+    now += dt
+    if (now >= nextEmit) emit(false)
+  }
+  document.getElementById('clock').textContent =
+    new Date(now).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) +
+    ' · ' + msgs.length + ' messages in the window'
+  drawScore()
+  drawSky()
+  drawGrid()
+  /* D's three thumbnails are comparative, not monitoring: 3 Hz is plenty */
+  if (now - fmAt > 330) { fmAt = now; drawFm() }
+  requestAnimationFrame(frame)
+}
+
+/* ---------- controls ---------- */
+
+document.getElementById('tPlay').addEventListener('click', function () {
+  playing = !playing
+  this.classList.toggle('on', playing)
+  this.textContent = playing ? '⏸ Pause' : '▶ Resume'
+})
+document.getElementById('tMany').addEventListener('click', function () {
+  many = !many
+  this.classList.toggle('on', many)
+  rebuild()
+})
+document.getElementById('tWait').addEventListener('click', function () {
+  oneWaiting = !oneWaiting
+  this.classList.toggle('on', oneWaiting)
+  rebuild()
+})
+document.getElementById('tCalm').addEventListener('click', function () {
+  var on = document.body.classList.toggle('calm')
+  this.classList.toggle('on', on)
+})
+document.getElementById('tBurst').addEventListener('click', function () {
+  for (var i = 0; i < 4; i++) (function (k) { setTimeout(function () { emit(true) }, k * 260) })(i)
+})
+
+window.addEventListener('resize', rebuild)
+
+seedHistory()
+rebuild()
+requestAnimationFrame(frame)
+</script>
+
+</body>
+</html>

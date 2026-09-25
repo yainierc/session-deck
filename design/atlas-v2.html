@@ -1,0 +1,1349 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Atlas — constellation, four shapes (v2)</title>
+<style>
+/*
+ * Atlas v2 — the constellation, for real.  24 Sep 2026
+ *
+ * `atlas-v1.html` put three screens side by side and the constellation ended
+ * up as the alternative: pretty and mute. This page goes after it alone, with
+ * four different geometries, and with a question that is not "which one looks
+ * coolest?" but this one:
+ *
+ *              WHAT DOES THE MOVEMENT MEAN?
+ *
+ * A monitoring screen that moves without saying anything is worse than a
+ * still one: it teaches you to ignore it. So every variant states, in one
+ * line, what data is causing each movement — and where there is none. Two of
+ * the four fail that question on purpose, so the difference between a live
+ * thing and an animated thing can be seen.
+ *
+ * WHAT CARRIES OVER FROM v1, not up for debate
+ *
+ *   · Color is STATE. Project is POSITION. Five projects do not fit in a set
+ *     of hues accessible over #0c0e11 and palette.js only validates three.
+ *   · A message travels as INK, not as a status hue. Travelling in blue it
+ *     would read as "busy".
+ *   · Nothing is inferred. With no acknowledgement, the stroke stays open.
+ *   · Zero dependencies. SVG + bézier math + requestAnimationFrame.
+ *     No graphs, no physics, no animation libraries.
+ *
+ * WHERE THE "LOOKS LIKE AN APP FROM THE FUTURE" COMES FROM
+ *
+ * Not from effects. From three cheap things and one expensive one:
+ *
+ *   1. Depth by layers: a background that moves slower than the foreground.
+ *      The brain reads that as space, and space reads as quality. It costs
+ *      one translation.
+ *   2. Light instead of fill: a small feGaussianBlur under the stroke, and
+ *      only under WHAT MOVES. A glow over everything is a nightclub; over
+ *      three elements it is an instrument.
+ *   3. Nothing arrives all at once: everything that appears or changes place
+ *      interpolates with an ease-out (1-(1-t)^3). An instant jump gives away
+ *      an old interface more than anything else.
+ *   4. The expensive one: that the movement be DATA. A panel feels like the
+ *      future when it seems to know something, not when it glows. Variant E2
+ *      is this whole idea: the bodies turn because the agents are going
+ *      quiet, and watching one peel away from the group is learning something.
+ *
+ * THE DATA
+ *
+ * The six agents —name, project, status— are real, from
+ * ~/.claude/sessions on 24 Sep 2026. The messages between them are made up.
+ */
+
+:root {
+  --bg: #0c0e11;
+  --panel: #14171c;
+  --panel-2: #1a1e25;
+  --line: #252a33;
+  --text: #e6e8eb;
+  --muted: #8b94a3;
+  --dim: #626c7d;
+  --accent: #4c8dff;
+  --waiting: #f0a83c;
+  --busy: #4c8dff;
+  --idle: #3fb950;
+  --shell: #a371f7;
+  --unknown: #626c7d;
+  --critical: #d03b3b;
+  --radius: 8px;
+
+  --hair: rgba(255,255,255,0.07);
+  --spine: rgba(255,255,255,0.10);
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  --ease: cubic-bezier(.2,.7,.3,1);
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background:
+    radial-gradient(1200px 620px at 50% -220px, rgba(76,141,255,0.06), transparent 70%),
+    var(--bg);
+  color: var(--text);
+  font: 14px/1.55 ui-sans-serif, -apple-system, "Segoe UI", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+.stage { max-width: 1240px; margin: 0 auto; padding: 0 28px 140px; }
+
+/* ---------- header ---------- */
+
+.stage-head {
+  position: sticky; top: 0; z-index: 40;
+  padding: 22px 0 14px;
+  background: linear-gradient(var(--bg) 62%, rgba(12,14,17,0));
+  backdrop-filter: blur(6px);
+}
+.crumb {
+  font: 500 11px/1 var(--mono);
+  letter-spacing: .14em; text-transform: uppercase; color: var(--dim);
+  display: flex; align-items: center; gap: 9px; margin-bottom: 9px;
+}
+.crumb .sep { color: #333a45; }
+.stage-title { display: flex; align-items: baseline; gap: 13px; flex-wrap: wrap; }
+.stage-title h1 { margin: 0; font-size: 21px; font-weight: 600; letter-spacing: -0.02em; }
+.stage-meta { font: 12px/1 var(--mono); color: var(--muted); }
+.stage-meta b { color: var(--text); font-weight: 500; }
+
+.intro { max-width: 80ch; color: var(--muted); margin: 16px 0 4px; }
+.intro p { margin: 0 0 10px; }
+.intro b { color: var(--text); font-weight: 600; }
+.intro code {
+  font: 12px/1 var(--mono); color: var(--text);
+  background: var(--panel-2); border: 1px solid var(--line);
+  border-radius: 4px; padding: 2px 5px;
+}
+.ask {
+  margin: 16px 0 0; padding: 14px 18px;
+  border: 1px solid rgba(76,141,255,.3); border-left-width: 2px;
+  border-radius: var(--radius); background: rgba(76,141,255,.05);
+}
+.ask b { color: var(--text); }
+.ask p { margin: 0; color: var(--muted); font-size: 13.5px; }
+
+.controls {
+  position: sticky; top: 74px; z-index: 30;
+  display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+  margin: 20px 0 10px; padding: 10px 12px;
+  background: rgba(20,23,28,.92); backdrop-filter: blur(8px);
+  border: 1px solid var(--line); border-radius: 10px;
+}
+.controls .label {
+  font: 500 10.5px/1 var(--mono); letter-spacing: .12em;
+  text-transform: uppercase; color: var(--dim); margin-right: 4px;
+}
+.tog {
+  appearance: none; cursor: pointer;
+  font: 500 12px/1 var(--mono); color: var(--muted);
+  background: var(--panel-2); border: 1px solid var(--line);
+  border-radius: 999px; padding: 7px 13px;
+  transition: color .14s var(--ease), border-color .14s var(--ease), background .14s var(--ease);
+}
+.tog:hover { color: var(--text); border-color: #333b47; }
+.tog.on { color: var(--text); border-color: rgba(76,141,255,.5); background: rgba(76,141,255,.1); }
+.controls .spacer { flex: 1 1 auto; }
+.controls .hint { font: 11px/1 var(--mono); color: var(--dim); }
+
+/* ---------- variant ---------- */
+
+.variant {
+  margin: 34px 0 0;
+  border: 1px solid var(--line); border-radius: 12px;
+  background: linear-gradient(180deg, var(--panel-2), var(--panel));
+  overflow: hidden;
+}
+.variant.is-pick { border-color: rgba(76,141,255,.42); }
+
+.v-head { padding: 17px 20px 15px; border-bottom: 1px solid var(--hair); }
+.v-head h2 {
+  margin: 0; font-size: 16px; font-weight: 600; letter-spacing: -0.01em;
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+}
+.v-head .tag {
+  font: 500 10px/1 var(--mono); letter-spacing: .1em; text-transform: uppercase;
+  color: var(--dim); border: 1px solid var(--line);
+  border-radius: 999px; padding: 4px 9px;
+}
+.v-head .tag.hot { color: var(--accent); border-color: rgba(76,141,255,.4); }
+.v-head p { margin: 7px 0 0; color: var(--muted); font-size: 13px; max-width: 88ch; }
+
+/* the line that forces you to be honest */
+.moves {
+  margin: 12px 0 0; padding: 10px 13px;
+  border-radius: 7px; background: rgba(0,0,0,.28);
+  border-left: 2px solid var(--line);
+  font: 12px/1.5 var(--mono); color: var(--muted); max-width: 92ch;
+}
+.moves b { color: var(--text); font-weight: 500; }
+.moves .good { color: var(--idle); }
+.moves .bad { color: var(--waiting); }
+.variant.is-pick .moves { border-left-color: rgba(76,141,255,.55); }
+
+.v-body { padding: 16px 20px 18px; }
+.canvas {
+  position: relative; border-radius: 10px; overflow: hidden;
+  background:
+    radial-gradient(760px 340px at 50% 42%, rgba(76,141,255,.05), transparent 72%),
+    rgba(0,0,0,.24);
+}
+
+.v-note {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 0 26px;
+  padding: 15px 20px 18px; border-top: 1px solid var(--hair);
+  background: rgba(0,0,0,.16);
+}
+.v-note p { margin: 0 0 7px; font-size: 12.5px; color: var(--muted); padding-left: 19px; position: relative; }
+.v-note p::before { position: absolute; left: 0; top: 0; font: 600 12px/1.5 var(--mono); }
+.v-note .pro::before { content: "+"; color: var(--idle); }
+.v-note .con::before { content: "−"; color: var(--waiting); }
+.v-note b { color: var(--text); font-weight: 600; }
+
+.legend {
+  display: flex; flex-wrap: wrap; gap: 6px 22px;
+  margin-top: 13px; padding-top: 12px; border-top: 1px dashed var(--line);
+  font-size: 12px; color: var(--dim);
+}
+.legend b { color: var(--muted); font-weight: 600; }
+.legend .swatch { display: inline-block; width: 18px; height: 2px; vertical-align: middle; margin-right: 5px; }
+
+svg { display: block; }
+svg text { font-family: var(--mono); }
+
+.verdict {
+  margin: 40px 0 0; padding: 20px 22px;
+  border: 1px solid rgba(76,141,255,.3); border-left-width: 2px;
+  border-radius: 12px; background: rgba(76,141,255,.045);
+}
+.verdict h2 { margin: 0 0 10px; font-size: 15px; font-weight: 600; }
+.verdict p { margin: 0 0 11px; color: var(--muted); max-width: 86ch; font-size: 13.5px; }
+.verdict p:last-child { margin-bottom: 0; }
+.verdict b { color: var(--text); font-weight: 600; }
+.verdict code {
+  font: 12px/1 var(--mono); color: var(--text);
+  background: rgba(0,0,0,.3); border: 1px solid var(--line);
+  border-radius: 4px; padding: 2px 5px;
+}
+
+body.calm *, body.calm *::before, body.calm *::after {
+  animation-duration: .001ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: .001ms !important;
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .001ms !important;
+  }
+}
+@media (max-width: 900px) { .v-note { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+
+<div class="stage">
+
+  <header class="stage-head">
+    <div class="crumb">
+      <span>Deck</span><span class="sep">/</span>
+      <span>All agents</span><span class="sep">/</span>
+      <span>Constellation</span>
+    </div>
+    <div class="stage-title">
+      <h1>Atlas — v2 · four constellations</h1>
+      <span class="stage-meta"><b>4</b> geometries · <b>6</b> real agents · <b>0</b> dependencies</span>
+    </div>
+  </header>
+
+  <div class="intro">
+    <p>
+      In <code>atlas-v1.html</code> the constellation ended up as the alternative with one hard
+      objection: <b>it is the prettiest and the least responsive</b>. This page goes after it alone
+      and tries four different geometries to see whether that objection belongs to the idea or only
+      to how it was drawn.
+    </p>
+    <p>
+      Everything that moves here is SVG, bézier math and <code>requestAnimationFrame</code> —
+      <b>not one library</b>. The "app from the future" feeling doesn't come from effects: it comes
+      from depth by layers (the background moves slower than the foreground), from light only under
+      what moves, and from nothing arriving all at once. And above all from the fourth one, the
+      expensive one: that the movement be data.
+    </p>
+  </div>
+
+  <div class="ask">
+    <p>
+      <b>The question on this page is not which one looks coolest.</b> It is: what does the movement
+      mean? Every variant states it in one line, and two of the four fail on purpose —
+      so the difference between a live thing and an animated thing can be seen.
+      <br><br>
+      The six agents are real (<code>~/.claude/sessions</code>, 24 Sep 2026). The messages between
+      them are made up: these sessions have not talked to each other yet.
+    </p>
+  </div>
+
+  <div class="controls">
+    <span class="label">Try</span>
+    <button class="tog on" id="tPlay">⏸ Pause</button>
+    <button class="tog" id="tMany">12 agents</button>
+    <button class="tog" id="tBurst">Burst of messages</button>
+    <button class="tog" id="tQuiet">Let them go quiet</button>
+    <button class="tog" id="tCalm">Reduced motion</button>
+    <span class="spacer"></span>
+    <span class="hint" id="clock">—</span>
+  </div>
+
+  <!-- ============================================================ E1 -->
+  <article class="variant">
+    <div class="v-head">
+      <h2>E1 · Chord ring <span class="tag">pure topology</span></h2>
+      <p>
+        Every agent on a ring, grouped by project with a band on the edge. Each pair that has talked
+        has a <b>chord</b> crossing the middle; its thickness is how many times.
+        The names read radially, outwards. When a message goes out, a head of light
+        runs along the chord and leaves it lit for a moment.
+      </p>
+      <p class="moves">
+        <b>What the movement means:</b>
+        <span class="good">the head of light</span> = a real message crossing, right now ·
+        <span class="good">the thickness</span> = how many times they have talked ·
+        <span class="good">the node's pulse</span> = it is working.
+        <br><b>Decoration:</b> none. Everything that moves here is caused by data.
+      </p>
+    </div>
+    <div class="v-body">
+      <div class="canvas" id="cRing"></div>
+      <div class="legend">
+        <span><b>Ring</b> = everyone · <b>band</b> = project</span>
+        <span><b>Chord</b> = they have talked</span>
+        <span><b>Thickness</b> = how many times</span>
+        <span><span class="swatch" style="background:var(--text)"></span><b>Light</b> = message in flight</span>
+      </div>
+    </div>
+    <div class="v-note">
+      <div>
+        <p class="pro"><b>It is the best answer to "who talks to whom?"</b> that exists in two dimensions. At a glance you see the knot, the sealed-off pairs and the one who talks to nobody.</p>
+        <p class="pro"><b>Perfectly stable position.</b> The spot on the ring is project and name: a session doesn't move from there all day.</p>
+        <p class="pro"><b>It holds twenty.</b> The ring grows in perimeter; the radial labels never collide because they fan out.</p>
+      </div>
+      <div>
+        <p class="con"><b>The middle is a knot.</b> With heavy traffic the chords pile up exactly where there is nothing to look at, and you have to drop the opacity until they are barely visible.</p>
+        <p class="con"><b>There is no time.</b> It says they talked, not when. A conversation from three hours ago weighs the same as one from a minute ago.</p>
+        <p class="con"><b>The ring wastes the middle:</b> a 400 × 400 px square that can only carry lines.</p>
+      </div>
+    </div>
+  </article>
+
+  <!-- ============================================================ E2 -->
+  <article class="variant is-pick">
+    <div class="v-head">
+      <h2>E2 · Orbits — the clock of silence <span class="tag hot">proposal</span></h2>
+      <p>
+        You are in the middle. Each ring is a project. And here is the idea:
+        <b>a body's angle is how long it has gone without doing anything</b>. Twelve o'clock is
+        "right now"; from there it turns clockwise as it goes quiet, and after ten minutes it stops
+        at the upper left, in the dead zone. An agent that works comes back to twelve in a soft
+        jump. An agent that gets stuck <b>peels away from the group in front of your eyes</b>, and
+        you see that without reading anything.
+      </p>
+      <p class="moves">
+        <b>What the movement means:</b>
+        <span class="good">turning clockwise</span> = a while without touching anything ·
+        <span class="good">snapping back to the top</span> = it just acted ·
+        <span class="good">the ring</span> = the project ·
+        <span class="good">the arc between bodies</span> = a message.
+        <br><b>Decoration:</b> none. There is no orbit for show: if nobody goes quiet, nothing
+        turns. Hit "let them go quiet" and watch.
+      </p>
+    </div>
+    <div class="v-body">
+      <div class="canvas" id="cOrbit"></div>
+      <div class="legend">
+        <span><b>Top</b> = active now</span>
+        <span><b>Clockwise</b> = time spent quiet</span>
+        <span><b>Dead zone</b> = more than 10 min</span>
+        <span><b>Ring</b> = project</span>
+        <span><b>Center</b> = you</span>
+      </div>
+    </div>
+    <div class="v-note">
+      <div>
+        <p class="pro"><b>The movement is the data.</b> It is the only one of the four where staring at it tells you something you didn't know: who is falling behind.</p>
+        <p class="pro"><b>It answers the question you actually have.</b> It isn't "who talks to whom?", it is "has one of them got stuck without me noticing?". That is an angle.</p>
+        <p class="pro"><b>The supervisor holds the axis</b>, which is the decision the Room already made: you are not one more colleague, you are the center.</p>
+        <p class="pro"><b>It reads best from a distance</b> of the four: the shape of the whole — all bunched at the top, or scattered — reads from three meters away.</p>
+      </div>
+      <div>
+        <p class="con"><b>You have to learn to read it.</b> "The angle is time spent quiet" is not obvious on day one. It needs the dead zone label always on, and probably a one-sentence tutorial.</p>
+        <p class="con"><b>Two agents from the same project that are equally quiet overlap.</b> Here they are separated with a fixed radius offset, which is an honest patch but it is a patch.</p>
+        <p class="con"><b>One ring per project doesn't scale past six or seven</b> before the radii get cramped.</p>
+      </div>
+    </div>
+  </article>
+
+  <!-- ============================================================ E3 -->
+  <article class="variant">
+    <div class="v-head">
+      <h2>E3 · Honeycomb <span class="tag">control room</span></h2>
+      <p>
+        One hexagonal cell per agent, grouped into flowers of seven per project. The inner hexagon
+        is the activity level; the border is the status. A message lights a path between two cells
+        and <b>leaves a ripple expanding out of the one that receives it</b>, which is the cheapest
+        way to say "something happened here" without writing it.
+      </p>
+      <p class="moves">
+        <b>What the movement means:</b>
+        <span class="good">the inner hexagon growing</span> = more activity ·
+        <span class="good">the lit path</span> = a real message ·
+        <span class="good">the ripple</span> = who received it.
+        <br><b>Decoration:</b> <span class="bad">the flower's background glow</span>, which is only
+        grouping — it could be a line and would be just as informative.
+      </p>
+    </div>
+    <div class="v-body">
+      <div class="canvas" id="cHex"></div>
+      <div class="legend">
+        <span><b>Cell</b> = one agent</span>
+        <span><b>Flower</b> = one project</span>
+        <span><b>Fill</b> = activity</span>
+        <span><b>Border</b> = status</span>
+        <span><b>Ripple</b> = just received</span>
+      </div>
+    </div>
+    <div class="v-note">
+      <div>
+        <p class="pro"><b>It scales best by a wide margin.</b> The cells tessellate: forty agents fit without anything overlapping or shrinking.</p>
+        <p class="pro"><b>Every cell is a real place to put things</b> — name, counters, a mini-trace. The ring and the orbits only have a dot.</p>
+        <p class="pro"><b>The regular grid scans very fast.</b> The eye compares identical cells far better than loose points in space.</p>
+      </div>
+      <div>
+        <p class="con"><b>The topology is lost.</b> Who talks to whom only exists while the path is lit; at rest the honeycomb says nothing about relationships.</p>
+        <p class="con"><b>The position inside the flower is arbitrary</b> and looks like it means something. That is worse than meaning nothing.</p>
+        <p class="con"><b>It is the closest to today's grid</b> of the four. Pretty, but if we end up here it's worth asking why we don't just fix the grid instead.</p>
+      </div>
+    </div>
+  </article>
+
+  <!-- ============================================================ E4 -->
+  <article class="variant">
+    <div class="v-head">
+      <h2>E4 · Stream <span class="tag">the pretty trap</span></h2>
+      <p>
+        Between each pair that talks runs a river of particles, and the river's density is the
+        conversation rate over the last half hour. A real message sends a bright <b>bolus</b> that
+        overtakes the current. It is, by far, the one that looks best on video.
+      </p>
+      <p class="moves">
+        <b>What the movement means:</b>
+        <span class="good">the river's density</span> = messages per minute between those two ·
+        <span class="good">the bright bolus</span> = a real message.
+        <br><b>Decoration:</b> <span class="bad">the background particles, which are almost
+        everything that moves</span>. They flow constantly even when nothing is happening, and that
+        is exactly what teaches a supervisor to stop looking at the screen.
+      </p>
+    </div>
+    <div class="v-body">
+      <div class="canvas" id="cFlow"></div>
+      <div class="legend">
+        <span><b>River</b> = one relationship</span>
+        <span><b>Density</b> = messages per minute</span>
+        <span><b>Bolus</b> = a real message</span>
+      </div>
+    </div>
+    <div class="v-note">
+      <div>
+        <p class="pro"><b>It is the most impressive</b>, no argument, and it makes the system look like an organism instead of a list.</p>
+        <p class="pro"><b>The flow rate is a real datum</b> and it is one no other variant shows: the sustained rhythm of a relationship, not its isolated events.</p>
+      </div>
+      <div>
+        <p class="con"><b>It moves when nothing is happening.</b> That is the cardinal sin of a monitoring screen: if there is always movement, movement stops being a signal.</p>
+        <p class="con"><b>It costs.</b> Two hundred particles per frame against the forty shapes of the other three — on laptop battery you notice, and this screen is left open for hours.</p>
+        <p class="con"><b>You can't read a value.</b> "Roughly dense" is not a quantity; nobody is going to tell four messages per minute from seven.</p>
+        <p class="con"><b>I include it so it can be ruled out with arguments</b>, not because I recommend it. If you pick it, pick it knowing this.</p>
+      </div>
+    </div>
+  </article>
+
+  <div class="verdict">
+    <h2>Verdict — E2, with E1 underneath as a second layer</h2>
+    <p>
+      <b>E2 (orbits) is the proposal,</b> for one reason only: it is the only one where staring at
+      it tells you something. The other three animate <em>events</em> — a message leaves, flashes
+      and goes out —, so if you weren't in front of it, it didn't happen. E2 animates a
+      <em>continuous state</em>: silence piles up as an angle, and an angle is still there when you
+      get back from coffee. That is the difference between a screen that warns you and a screen
+      that entertains you.
+    </p>
+    <p>
+      And it answers the right question along the way. With six agents across five projects, what
+      wakes you up at night isn't "who talks to whom?" — it is <b>"has one of them got stuck
+      without me noticing?"</b>. That is exactly what E2 draws.
+    </p>
+    <p>
+      <b>E1 (ring) doesn't compete with E2: it completes it.</b> One is continuous state, the other
+      is structure. The natural thing is for E1's chords to live <em>inside</em> E2's orbits —
+      E2's middle is empty and E1's flaw was precisely wasting the middle. One single screen:
+      rings outside, chords crossing inside.
+    </p>
+    <p>
+      <b>E3 (honeycomb) is the honest plan B</b> if this has to carry thirty agents, which is when
+      E2 runs out of radii. <b>E4 (stream) I would drop</b>: it moves when nothing is happening,
+      and a monitoring screen that always moves teaches you not to look at it.
+    </p>
+    <p>
+      None of this asks for new data. The rings and the angles come out of <code>/api/activity</code>
+      (the timestamp of the last event per session, which already ships); the chords and the arcs,
+      out of <code>/api/meetings</code>. The only thing missing is the same as in v1: an endpoint
+      that returns all recent turns at once instead of one conversation per pair.
+    </p>
+  </div>
+
+</div>
+
+<script>
+/* =====================================================================
+ * Data and simulation (same as atlas-v1.html)
+ * ===================================================================== */
+
+var AGENTS = [
+  { id: 'f7', name: 'session-deck-f7',      project: 'session-deck',      status: 'busy' },
+  { id: 'ed', name: 'github-acmeplatform-ed',   project: 'GITHUB-AcmePlatform',   status: 'busy' },
+  { id: '2f', name: 'github-acmeplatform-2f',   project: 'GITHUB-AcmePlatform',   status: 'idle' },
+  { id: 'pi', name: 'github-acmepilot-2f',     project: 'GITHUB-AcmePilot',     status: 'idle' },
+  { id: 'pa', name: 'github-acmepayments-d3',  project: 'GITHUB-AcmePayments',  status: 'idle' },
+  { id: 'ss', name: 'github-acmeselfserve-33', project: 'GITHUB-AcmeSelfServe', status: 'idle' }
+]
+var EXTRA = [
+  { id: 'x1', name: 'github-acmeplatform-9c',   project: 'GITHUB-AcmePlatform',   status: 'idle' },
+  { id: 'x2', name: 'github-acmepilot-b4',     project: 'GITHUB-AcmePilot',     status: 'busy' },
+  { id: 'x3', name: 'github-acmepilot-07',     project: 'GITHUB-AcmePilot',     status: 'idle' },
+  { id: 'x4', name: 'github-acmepayments-5a',  project: 'GITHUB-AcmePayments',  status: 'shell' },
+  { id: 'x5', name: 'session-deck-3b',      project: 'session-deck',      status: 'idle' },
+  { id: 'x6', name: 'github-acmeselfserve-e1', project: 'GITHUB-AcmeSelfServe', status: 'busy' }
+]
+var SCRIPT = [
+  { from: 'f7', to: 'ed', s: 'The pipeline naming scheme does not validate' },
+  { from: 'ed', to: 'f7', s: 'Confirmed, the environment code is missing' },
+  { from: 'ed', to: '2f', s: 'Do not touch bicep/ until I push the fix' },
+  { from: '2f', to: 'ed', s: 'Will do, I am only in tests' },
+  { from: 'f7', to: 'pa', s: 'Is the refunds endpoint still on staging?' },
+  { from: 'f7', to: 'pi', s: 'I need the contract before I can close' },
+  { from: 'pi', to: 'f7', s: 'Pushed, check the contract-v2 branch' },
+  { from: 'ed', to: 'ss', s: 'Login shares the same tenant' },
+  { from: 'ss', to: 'ed', s: 'Then the scope has to be versioned' },
+  { from: 'pa', to: 'f7', s: 'Yes, and the webhook changed shape' },
+  { from: 'f7', to: 'ed', s: 'Merged. Run the pipeline again' }
+]
+
+var SVG = 'http://www.w3.org/2000/svg'
+var TAU = Math.PI * 2
+var IDLE_FULL = 10 * 60 * 1000   /* after 10 min of nothing, the body stops in the dead zone */
+var DEAD_ARC = 300               /* degrees travelled in those 10 min; the remaining 60 are dead zone */
+
+var playing = true
+var quiet = false                /* the "let them go quiet" switch */
+var many = false
+var now = Date.now()
+var last = performance.now()
+var msgs = []
+var flights = []                 /* messages in flight, shared by all four */
+var scriptAt = 0
+var nextEmit = 0
+var lastAct = {}                 /* id -> instant of the last file event */
+
+function el(tag, attrs) {
+  var n = document.createElementNS(SVG, tag)
+  for (var k in attrs) n.setAttribute(k, attrs[k])
+  return n
+}
+function ease(t) { return 1 - Math.pow(1 - t, 3) }
+function colorOf(s) {
+  return s === 'busy' ? '#4c8dff' : s === 'waiting' ? '#f0a83c'
+    : s === 'shell' ? '#a371f7' : s === 'idle' ? '#3fb950' : '#626c7d'
+}
+function live() { return many ? AGENTS.concat(EXTRA) : AGENTS.slice() }
+function grouped() {
+  var by = {}
+  live().forEach(function (a) { (by[a.project] = by[a.project] || []).push(a) })
+  return Object.keys(by).sort().map(function (p) {
+    return { project: p, agents: by[p].sort(function (x, y) { return x.name < y.name ? -1 : 1 }) }
+  })
+}
+function shortOf(a) {
+  var pre = a.project.toLowerCase() + '-'
+  return a.name.toLowerCase().indexOf(pre) === 0 ? a.name.slice(pre.length) : a.name
+}
+
+/* Point on a quadratic bézier, by hand. Avoids getPointAtLength, which forces
+ * the browser to measure a path's geometry for every particle and every
+ * frame — with two hundred particles that alone eats the budget. */
+function qPoint(p0, c, p1, t) {
+  var u = 1 - t
+  return { x: u * u * p0.x + 2 * u * t * c.x + t * t * p1.x,
+           y: u * u * p0.y + 2 * u * t * c.y + t * t * p1.y }
+}
+
+function seed() {
+  msgs = []; flights = []; scriptAt = 0
+  var t = now - 25 * 60000
+  for (var i = 0; i < 14; i++) {
+    var sp = SCRIPT[i % SCRIPT.length]
+    msgs.push({ from: sp.from, to: sp.to, at: t, s: sp.s })
+    t += 60000 + (i % 5) * 44000
+  }
+  nextEmit = now + 2200
+  /* The initial silence is spread across the whole dial on purpose: if they
+   * all start freshly active, E2 opens with twelve dots piled up at 12 and the
+   * clock idea isn't visible until you've watched for ten minutes. */
+  var i = 0
+  live().forEach(function (a) {
+    lastAct[a.id] = a.status === 'busy'
+      ? now - 3000 - (i % 3) * 4000
+      : now - (40000 + ((i * 137) % 9) / 9 * (IDLE_FULL * 1.25))
+    i++
+  })
+}
+
+/* Agents that are working touch files constantly; idle ones, now and then.
+ * The "quiet" switch cuts the drip off at once, which is the only way to see
+ * what E2 does. */
+function tickActivity() {
+  live().forEach(function (a) {
+    if (lastAct[a.id] === undefined) lastAct[a.id] = now - 120000
+    if (quiet) return
+    /* An idle session touches a file every few minutes, not every minute: if
+     * the drip were faster than the clock's window, no body would ever get all
+     * the way round and the dial would be decorative. */
+    var every = a.status === 'busy' ? 6000 : a.status === 'shell' ? 70000 : 420000
+    if (now - lastAct[a.id] > every * (0.5 + Math.random() * 1.4)) lastAct[a.id] = now
+  })
+}
+
+function emit(fast) {
+  var ids = live().map(function (a) { return a.id })
+  var sp = SCRIPT[scriptAt % SCRIPT.length]; scriptAt++
+  var from = ids.indexOf(sp.from) >= 0 ? sp.from : ids[(scriptAt * 3) % ids.length]
+  var to = ids.indexOf(sp.to) >= 0 ? sp.to : ids[(scriptAt * 5 + 1) % ids.length]
+  if (from === to) to = ids[(ids.indexOf(from) + 1) % ids.length]
+  var m = { from: from, to: to, at: now, s: sp.s }
+  msgs.push(m)
+  if (msgs.length > 90) msgs.shift()
+  flights.push({ from: from, to: to, born: now, s: sp.s })
+  /* sending a message is activity too */
+  lastAct[from] = now
+  nextEmit = now + (fast ? 620 : 4000 + Math.random() * 4500)
+}
+
+/* Pairs that have talked, with weight. Used by E1, E3 and E4. */
+function pairs() {
+  var w = {}
+  msgs.forEach(function (m) {
+    var k = m.from < m.to ? m.from + '|' + m.to : m.to + '|' + m.from
+    w[k] = (w[k] || 0) + 1
+  })
+  return w
+}
+
+/* The light filter. One per svg, and only what moves hangs off it:
+ * a glow over everything is a nightclub, over three elements an instrument. */
+function withGlow(svg, dev) {
+  var defs = el('defs', {})
+  var f = el('filter', { id: 'glow' + (svg.dataset ? '' : ''), x: '-90%', y: '-90%', width: '280%', height: '280%' })
+  f.setAttribute('id', 'g' + Math.random().toString(36).slice(2, 8))
+  f.appendChild(el('feGaussianBlur', { stdDeviation: dev || 3.2, result: 'b' }))
+  var merge = el('feMerge', {})
+  merge.appendChild(el('feMergeNode', { in: 'b' }))
+  merge.appendChild(el('feMergeNode', { in: 'SourceGraphic' }))
+  f.appendChild(merge)
+  defs.appendChild(f)
+  svg.appendChild(defs)
+  return f.getAttribute('id')
+}
+
+/* Depth background: a grid of dots that drags SLOWER than everything else.
+ * It is half the "space" effect and it costs one translation. */
+function starfield(svg, W, H) {
+  var g = el('g', { opacity: 0.5 })
+  for (var y = -30; y < H + 30; y += 34) {
+    for (var x = -30; x < W + 30; x += 34) {
+      g.appendChild(el('circle', { cx: x, cy: y, r: 0.7, fill: '#ffffff', opacity: 0.045 }))
+    }
+  }
+  svg.appendChild(g)
+  return g
+}
+
+/* =====================================================================
+ * E1 · CHORD RING
+ * ===================================================================== */
+
+var ring = { host: document.getElementById('cRing') }
+
+function buildRing() {
+  var h = ring.host
+  h.innerHTML = ''
+  var W = h.clientWidth || 1100, H = 500
+  var svg = el('svg', { width: '100%', height: H, viewBox: '0 0 ' + W + ' ' + H })
+  h.appendChild(svg)
+  ring.svg = svg; ring.W = W; ring.H = H
+  ring.stars = starfield(svg, W, H)
+  ring.glow = withGlow(svg, 3.4)
+  ring.gStatic = el('g', {}); svg.appendChild(ring.gStatic)
+  ring.gLive = el('g', { filter: 'url(#' + ring.glow + ')' }); svg.appendChild(ring.gLive)
+
+  var cx = W / 2, cy = H / 2
+  /* the radius leaves room outside for the curved text rail, which is what
+   * reaches furthest from the center */
+  var R = Math.min(W * 0.30, (H - 116) / 2)
+  ring.cx = cx; ring.cy = cy; ring.R = R
+  ring.pos = {}
+
+  /* Sharing out the ring: each project takes a sector proportional to how many
+   * agents it has, with a gap between sectors so the band reads. */
+  var groups = grouped()
+  var total = live().length
+  var GAP = 0.055
+  var free = TAU - GAP * groups.length
+  var a0 = -Math.PI / 2 + GAP / 2
+  ring.bands = []
+  groups.forEach(function (g) {
+    var span = free * (g.agents.length / total)
+    ring.bands.push({ project: g.project, from: a0, to: a0 + span })
+    g.agents.forEach(function (a, i) {
+      var t = g.agents.length === 1 ? 0.5 : (i + 0.5) / g.agents.length
+      var ang = a0 + span * t
+      ring.pos[a.id] = { x: cx + Math.cos(ang) * R, y: cy + Math.sin(ang) * R, ang: ang }
+    })
+    a0 += span + GAP
+  })
+}
+
+function drawRing() {
+  var s = ring
+  if (!s.svg) return
+  while (s.gStatic.firstChild) s.gStatic.removeChild(s.gStatic.firstChild)
+  while (s.gLive.firstChild) s.gLive.removeChild(s.gLive.firstChild)
+  s.stars.setAttribute('transform', 'translate(' + ((now / 900) % 34 - 34) + ',' + ((now / 2600) % 34 - 34) + ')')
+
+  /* Project bands on the edge, with the name CURVED along the band itself.
+   * Set straight and facing out it collided with the name of the agent that
+   * falls on that same radius; on the arc it can't collide with anything
+   * because it takes exactly the space the band already reserved. */
+  s.bands.forEach(function (b, bi) {
+    var rr = s.R + 17
+    var big = (b.to - b.from) > Math.PI ? 1 : 0
+    var p0 = { x: s.cx + Math.cos(b.from) * rr, y: s.cy + Math.sin(b.from) * rr }
+    var p1 = { x: s.cx + Math.cos(b.to) * rr, y: s.cy + Math.sin(b.to) * rr }
+    s.gStatic.appendChild(el('path', {
+      d: 'M' + p0.x + ' ' + p0.y + ' A' + rr + ' ' + rr + ' 0 ' + big + ' 1 ' + p1.x + ' ' + p1.y,
+      fill: 'none', stroke: 'rgba(255,255,255,.14)', 'stroke-width': 2.5, 'stroke-linecap': 'round'
+    }))
+
+    /* The text rail runs outside the band; on the bottom half it is traced
+     * backwards so the letters don't come out upside down. */
+    var mid = (b.from + b.to) / 2
+    var upside = Math.sin(mid) > 0.1
+    var tr = s.R + (upside ? 46 : 33)
+    var a0 = upside ? b.to : b.from
+    var a1 = upside ? b.from : b.to
+    var q0 = { x: s.cx + Math.cos(a0) * tr, y: s.cy + Math.sin(a0) * tr }
+    var q1 = { x: s.cx + Math.cos(a1) * tr, y: s.cy + Math.sin(a1) * tr }
+    var id = 'rb' + bi
+    var rail = el('path', {
+      id: id, fill: 'none', stroke: 'none',
+      d: 'M' + q0.x + ' ' + q0.y + ' A' + tr + ' ' + tr + ' 0 ' + big + ' ' + (upside ? 0 : 1) + ' ' + q1.x + ' ' + q1.y
+    })
+    s.gStatic.appendChild(rail)
+    var t = el('text', {
+      fill: '#626c7d', 'font-size': 8.5, 'letter-spacing': '.14em',
+      stroke: '#0c0e11', 'stroke-width': 3, 'paint-order': 'stroke'
+    })
+    var tp = el('textPath', { startOffset: '50%', 'text-anchor': 'middle' })
+    tp.setAttributeNS('http://www.w3.org/1999/xlink', 'href', '#' + id)
+    tp.setAttribute('href', '#' + id)
+    tp.textContent = b.project.toUpperCase().replace(/^GITHUB-/, '')
+    t.appendChild(tp)
+    s.gStatic.appendChild(t)
+  })
+
+  /* chords: control point pulled towards the center by how opposed they are */
+  var w = pairs()
+  Object.keys(w).forEach(function (k) {
+    var ab = k.split('|')
+    var A = s.pos[ab[0]], B = s.pos[ab[1]]
+    if (!A || !B) return
+    var d = Math.abs(A.ang - B.ang); if (d > Math.PI) d = TAU - d
+    var pull = 0.12 + (1 - d / Math.PI) * 0.6      /* close on the ring = more bulging chord */
+    var c = { x: s.cx + ((A.x + B.x) / 2 - s.cx) * pull, y: s.cy + ((A.y + B.y) / 2 - s.cy) * pull }
+    s.gStatic.appendChild(el('path', {
+      d: 'M' + A.x + ' ' + A.y + ' Q' + c.x + ' ' + c.y + ' ' + B.x + ' ' + B.y,
+      fill: 'none', stroke: 'rgba(230,232,235,.13)',
+      'stroke-width': Math.min(3.4, 0.6 + w[k] * 0.45), 'stroke-linecap': 'round'
+    }))
+  })
+
+  /* nodes and radial labels */
+  live().forEach(function (a) {
+    var p = s.pos[a.id]; if (!p) return
+    var col = colorOf(a.status)
+    if (a.status === 'busy' || a.status === 'waiting') {
+      var ph = (now % 2200) / 2200
+      s.gStatic.appendChild(el('circle', {
+        cx: p.x, cy: p.y, r: 9 + ph * 15, fill: 'none', stroke: col,
+        'stroke-width': 1, opacity: 0.32 * (1 - ph)
+      }))
+    }
+    s.gStatic.appendChild(el('circle', { cx: p.x, cy: p.y, r: 7.5, fill: '#0f1216', stroke: col, 'stroke-width': 1.6 }))
+    s.gStatic.appendChild(el('circle', { cx: p.x, cy: p.y, r: 2.9, fill: col }))
+
+    /* The name goes outwards but WITHOUT rotating. Rotated it looks elegant
+     * with long names and ridiculous with ours: "f7" turned ninety degrees
+     * isn't read, it's deciphered. */
+    var lr = s.R + 13
+    var lx = s.cx + Math.cos(p.ang) * lr, ly = s.cy + Math.sin(p.ang) * lr
+    var cosv = Math.cos(p.ang)
+    var anchor = cosv > 0.25 ? 'start' : cosv < -0.25 ? 'end' : 'middle'
+    var t = el('text', {
+      x: lx, y: ly + (anchor === 'middle' ? (Math.sin(p.ang) < 0 ? -5 : 11) : 0),
+      fill: '#e6e8eb', 'font-size': 10.5,
+      'text-anchor': anchor, 'dominant-baseline': anchor === 'middle' ? 'auto' : 'middle',
+      stroke: '#0c0e11', 'stroke-width': 3.2, 'paint-order': 'stroke'
+    })
+    t.textContent = shortOf(a)
+    s.gStatic.appendChild(t)
+  })
+
+  /* messages in flight */
+  var FLY = 1500
+  flights.forEach(function (f) {
+    var A = s.pos[f.from], B = s.pos[f.to]
+    if (!A || !B) return
+    var pr = (now - f.born) / FLY
+    if (pr < 0 || pr > 1) return
+    var d = Math.abs(A.ang - B.ang); if (d > Math.PI) d = TAU - d
+    var pull = 0.12 + (1 - d / Math.PI) * 0.6
+    var c = { x: s.cx + ((A.x + B.x) / 2 - s.cx) * pull, y: s.cy + ((A.y + B.y) / 2 - s.cy) * pull }
+    var e = ease(pr)
+    /* the whole chord lights up and fades: the trail lasts longer than the head */
+    s.gLive.appendChild(el('path', {
+      d: 'M' + A.x + ' ' + A.y + ' Q' + c.x + ' ' + c.y + ' ' + B.x + ' ' + B.y,
+      fill: 'none', stroke: '#e6e8eb', 'stroke-width': 1.5, 'stroke-linecap': 'round',
+      opacity: 0.55 * (1 - pr)
+    }))
+    var pt = qPoint(A, c, B, e)
+    s.gLive.appendChild(el('circle', { cx: pt.x, cy: pt.y, r: 3.2, fill: '#e6e8eb' }))
+  })
+}
+
+/* =====================================================================
+ * E2 · ORBITS — THE CLOCK OF SILENCE
+ * ===================================================================== */
+
+var orb = { host: document.getElementById('cOrbit'), shown: {} }
+
+function buildOrbit() {
+  var h = orb.host
+  h.innerHTML = ''
+  var W = h.clientWidth || 1100, H = 500
+  var svg = el('svg', { width: '100%', height: H, viewBox: '0 0 ' + W + ' ' + H })
+  h.appendChild(svg)
+  orb.svg = svg; orb.W = W; orb.H = H
+  orb.stars = starfield(svg, W, H)
+  orb.glow = withGlow(svg, 3.6)
+  orb.gStatic = el('g', {}); svg.appendChild(orb.gStatic)
+  orb.gLive = el('g', { filter: 'url(#' + orb.glow + ')' }); svg.appendChild(orb.gLive)
+
+  orb.cx = W / 2; orb.cy = H / 2 + 4
+  var groups = grouped()
+  var maxR = Math.min(W * 0.30, (H - 100) / 2)
+  var r0 = 52
+  orb.rings = groups.map(function (g, i) {
+    return {
+      project: g.project,
+      r: r0 + (groups.length === 1 ? 0 : (maxR - r0) * (i / (groups.length - 1))),
+      agents: g.agents
+    }
+  })
+  /* two equally quiet agents would land on the same point: they are separated
+   * with a fixed radius offset. It's a patch, and it's stated in the cons. */
+  orb.offset = {}
+  orb.rings.forEach(function (rg) {
+    rg.agents.forEach(function (a, i) {
+      orb.offset[a.id] = (i - (rg.agents.length - 1) / 2) * 15
+    })
+  })
+}
+
+/* The angle IS the data: 12 o'clock = just acted; it turns clockwise up to
+ * 300°, which is "10 minutes or more without touching anything". */
+function idleAngle(id) {
+  var since = now - (lastAct[id] || now)
+  var k = Math.min(1, since / IDLE_FULL)
+  return -Math.PI / 2 + (DEAD_ARC * Math.PI / 180) * k
+}
+
+function drawOrbit() {
+  var s = orb
+  if (!s.svg) return
+  while (s.gStatic.firstChild) s.gStatic.removeChild(s.gStatic.firstChild)
+  while (s.gLive.firstChild) s.gLive.removeChild(s.gLive.firstChild)
+  s.stars.setAttribute('transform', 'translate(' + ((now / 1100) % 34 - 34) + ',0)')
+
+  /* rings, with the dead zone marked on each one */
+  var nRings = s.rings.length
+  s.rings.forEach(function (rg, ri) {
+    s.gStatic.appendChild(el('circle', {
+      cx: s.cx, cy: s.cy, r: rg.r, fill: 'none',
+      stroke: 'rgba(255,255,255,.07)', 'stroke-width': 1
+    }))
+    var a1 = -Math.PI / 2 + DEAD_ARC * Math.PI / 180
+    var a2 = -Math.PI / 2 + TAU
+    var p1 = { x: s.cx + Math.cos(a1) * rg.r, y: s.cy + Math.sin(a1) * rg.r }
+    var p2 = { x: s.cx + Math.cos(a2) * rg.r, y: s.cy + Math.sin(a2) * rg.r }
+    s.gStatic.appendChild(el('path', {
+      d: 'M' + p1.x + ' ' + p1.y + ' A' + rg.r + ' ' + rg.r + ' 0 0 1 ' + p2.x + ' ' + p2.y,
+      fill: 'none', stroke: 'rgba(240,168,60,.16)', 'stroke-width': 2, 'stroke-dasharray': '2 5'
+    }))
+    /* The project name fans out across the bottom half, each one on ITS own
+     * ring and at a different angle. All at 6 they fell on the same vertical
+     * and read as a list; all at 3 they overlapped each other. Fanned out,
+     * every label is separated from the next in radius AND in angle, and they
+     * sit in the zone the bodies almost never cross. */
+    var la = Math.PI / 2 + (ri - (nRings - 1) / 2) * 0.40
+    /* OUTSIDE the ring: the bodies travel along the line, and at 6 they used
+     * to sit on top of the project name */
+    var lt = el('text', {
+      x: s.cx + Math.cos(la) * (rg.r + 22),
+      y: s.cy + Math.sin(la) * (rg.r + 22) + 3,
+      fill: '#4e5766', 'font-size': 8.5,
+      'text-anchor': 'middle', 'letter-spacing': '.12em',
+      stroke: '#0c0e11', 'stroke-width': 3.6, 'paint-order': 'stroke'
+    })
+    /* four of the five carry "GITHUB-": it distinguishes nothing and steals room */
+    lt.textContent = rg.project.toUpperCase().replace(/^GITHUB-/, '')
+    s.gStatic.appendChild(lt)
+  })
+
+  /* the center: you */
+  s.gStatic.appendChild(el('circle', { cx: s.cx, cy: s.cy, r: 19, fill: 'none', stroke: 'rgba(76,141,255,.2)', 'stroke-width': 1 }))
+  s.gStatic.appendChild(el('circle', { cx: s.cx, cy: s.cy, r: 5, fill: '#4c8dff', opacity: 0.85 }))
+  var you = el('text', {
+    x: s.cx, y: s.cy + 34, fill: '#8b94a3', 'font-size': 9.5, 'text-anchor': 'middle',
+    'letter-spacing': '.14em', stroke: '#0c0e11', 'stroke-width': 3, 'paint-order': 'stroke'
+  })
+  you.textContent = 'YOU'
+  s.gStatic.appendChild(you)
+
+  /* the 12 o'clock mark: "now" */
+  var topR = s.rings.length ? s.rings[s.rings.length - 1].r : 100
+  s.gStatic.appendChild(el('line', {
+    x1: s.cx, y1: s.cy - topR - 22, x2: s.cx, y2: s.cy - 26,
+    stroke: 'rgba(255,255,255,.1)', 'stroke-width': 1, 'stroke-dasharray': '2 4'
+  }))
+  var na = el('text', {
+    x: s.cx, y: s.cy - topR - 32, fill: '#8b94a3', 'font-size': 9, 'text-anchor': 'middle',
+    'letter-spacing': '.12em', stroke: '#0c0e11', 'stroke-width': 3, 'paint-order': 'stroke'
+  })
+  na.textContent = 'ACTIVE NOW'
+  s.gStatic.appendChild(na)
+  var dz = el('text', {
+    x: s.cx - topR * 0.80, y: s.cy - topR * 0.62, fill: '#7a6535', 'font-size': 8.5,
+    'text-anchor': 'middle', 'letter-spacing': '.1em',
+    stroke: '#0c0e11', 'stroke-width': 3, 'paint-order': 'stroke'
+  })
+  dz.textContent = '+10 MIN QUIET'
+  s.gStatic.appendChild(dz)
+
+  /* the bodies. The drawn position chases the real one with an ease-out, so
+   * that "just acted" is a soft return and not a teleport. */
+  var place = {}
+  s.rings.forEach(function (rg) {
+    rg.agents.forEach(function (a) {
+      var target = idleAngle(a.id)
+      var cur = s.shown[a.id]
+      if (cur === undefined || Math.abs(cur - target) > 5) cur = target
+      /* the jump back to 12 is travelled, not jumped */
+      s.shown[a.id] = cur + (target - cur) * 0.12
+      var ang = s.shown[a.id]
+      var rr = rg.r + (s.offset[a.id] || 0)
+      place[a.id] = { x: s.cx + Math.cos(ang) * rr, y: s.cy + Math.sin(ang) * rr, ang: ang, r: rr }
+    })
+  })
+
+  live().forEach(function (a) {
+    var p = place[a.id]; if (!p) return
+    var col = colorOf(a.status)
+    var since = now - (lastAct[a.id] || now)
+    var stale = Math.min(1, since / IDLE_FULL)
+
+    /* the trail: where it has been turning from. It is literally its silence. */
+    if (stale > 0.04) {
+      var a0 = -Math.PI / 2
+      var big = (p.ang - a0) > Math.PI ? 1 : 0
+      var q0 = { x: s.cx + Math.cos(a0) * p.r, y: s.cy + Math.sin(a0) * p.r }
+      s.gStatic.appendChild(el('path', {
+        d: 'M' + q0.x + ' ' + q0.y + ' A' + p.r + ' ' + p.r + ' 0 ' + big + ' 1 ' + p.x + ' ' + p.y,
+        fill: 'none', stroke: col, 'stroke-width': 1.6, 'stroke-linecap': 'round',
+        opacity: 0.14 + stale * 0.34
+      }))
+    }
+
+    if (a.status === 'busy' || a.status === 'waiting') {
+      var ph = (now % 2200) / 2200
+      s.gStatic.appendChild(el('circle', {
+        cx: p.x, cy: p.y, r: 10 + ph * 16, fill: 'none', stroke: col,
+        'stroke-width': 1, opacity: 0.3 * (1 - ph)
+      }))
+    }
+    s.gStatic.appendChild(el('circle', { cx: p.x, cy: p.y, r: 8, fill: '#0f1216', stroke: col, 'stroke-width': 1.7 }))
+    s.gStatic.appendChild(el('circle', { cx: p.x, cy: p.y, r: 3.1, fill: col }))
+
+    /* The label goes BESIDE the body, not along the radius. Pushed outwards,
+     * when everyone is active they stack on the 12 o'clock vertical and each
+     * label lands on top of the next ring's body. Beside it, the gap between
+     * labels is the gap between rings. */
+    var right = Math.cos(p.ang) >= -0.25
+    var t = el('text', {
+      x: p.x + (right ? 13 : -13), y: p.y, fill: stale > 0.85 ? '#f0a83c' : '#e6e8eb',
+      'font-size': 10.5,
+      'text-anchor': right ? 'start' : 'end', 'dominant-baseline': 'middle',
+      stroke: '#0c0e11', 'stroke-width': 3.2, 'paint-order': 'stroke'
+    })
+    t.textContent = shortOf(a)
+    s.gStatic.appendChild(t)
+  })
+
+  /* message arcs between bodies, curved outside the center */
+  var FLY = 1500
+  flights.forEach(function (f) {
+    var A = place[f.from], B = place[f.to]
+    if (!A || !B) return
+    var pr = (now - f.born) / FLY
+    if (pr < 0 || pr > 1) return
+    var mx = (A.x + B.x) / 2, my = (A.y + B.y) / 2
+    var c = { x: s.cx + (mx - s.cx) * 1.42, y: s.cy + (my - s.cy) * 1.42 }
+    var e = ease(pr)
+    s.gLive.appendChild(el('path', {
+      d: 'M' + A.x + ' ' + A.y + ' Q' + c.x + ' ' + c.y + ' ' + B.x + ' ' + B.y,
+      fill: 'none', stroke: '#e6e8eb', 'stroke-width': 1.5, 'stroke-linecap': 'round',
+      opacity: 0.5 * (1 - pr)
+    }))
+    var pt = qPoint(A, c, B, e)
+    s.gLive.appendChild(el('circle', { cx: pt.x, cy: pt.y, r: 3.3, fill: '#e6e8eb' }))
+  })
+}
+
+/* =====================================================================
+ * E3 · HONEYCOMB
+ * ===================================================================== */
+
+var hex = { host: document.getElementById('cHex'), ripples: [] }
+
+function hexPath(cx, cy, r) {
+  var d = ''
+  for (var i = 0; i < 6; i++) {
+    var a = i * Math.PI / 3
+    d += (i ? 'L' : 'M') + (cx + Math.cos(a) * r) + ' ' + (cy + Math.sin(a) * r)
+  }
+  return d + 'Z'
+}
+
+function buildHex() {
+  var h = hex.host
+  h.innerHTML = ''
+  var W = h.clientWidth || 1100, H = 440
+  var svg = el('svg', { width: '100%', height: H, viewBox: '0 0 ' + W + ' ' + H })
+  h.appendChild(svg)
+  hex.svg = svg; hex.W = W; hex.H = H
+  hex.stars = starfield(svg, W, H)
+  hex.glow = withGlow(svg, 3)
+  hex.gStatic = el('g', {}); svg.appendChild(hex.gStatic)
+  hex.gLive = el('g', { filter: 'url(#' + hex.glow + ')' }); svg.appendChild(hex.gLive)
+
+  /* One "flower" per project: a central cell and up to six around it. Seven
+   * agents per project fit without the flower ceasing to be a flower. */
+  /* With six agents the 30 px cells left the screen empty and the flower
+   * looked like a bubble with a pebble inside. The cell grows when there are
+   * few and shrinks when there are many: that is what makes the honeycomb
+   * look just as full with six as with twenty. */
+  var R = live().length <= 7 ? 44 : 30
+  var STEP = Math.sqrt(3) * R
+  var groups = grouped()
+  var cols = groups.length <= 3 ? groups.length : Math.ceil(groups.length / 2)
+  var rows = Math.ceil(groups.length / cols)
+  hex.cells = {}
+  hex.flowers = []
+  groups.forEach(function (g, gi) {
+    var col = gi % cols, row = Math.floor(gi / cols)
+    var fx = W * (col + 0.5) / cols
+    var fy = H * (row + 0.5) / rows - 6
+    /* the flower's halo hugs what it actually contains */
+    hex.flowers.push({
+      project: g.project, x: fx, y: fy,
+      r: g.agents.length === 1 ? R * 1.35 : STEP * (g.agents.length <= 3 ? 1.5 : 1.85)
+    })
+    g.agents.forEach(function (a, ai) {
+      if (ai === 0) { hex.cells[a.id] = { x: fx, y: fy, r: R }; return }
+      var ang = ((ai - 1) % 6) * Math.PI / 3 + Math.PI / 6
+      var k = 1 + Math.floor((ai - 1) / 6)
+      hex.cells[a.id] = { x: fx + Math.cos(ang) * STEP * k, y: fy + Math.sin(ang) * STEP * k, r: R }
+    })
+  })
+}
+
+function drawHex() {
+  var s = hex
+  if (!s.svg) return
+  while (s.gStatic.firstChild) s.gStatic.removeChild(s.gStatic.firstChild)
+  while (s.gLive.firstChild) s.gLive.removeChild(s.gLive.firstChild)
+  s.stars.setAttribute('transform', 'translate(0,' + ((now / 1600) % 34 - 34) + ')')
+
+  /* the flower's glow: grouping, and nothing else. Marked as decoration. */
+  s.flowers.forEach(function (f) {
+    s.gStatic.appendChild(el('circle', {
+      cx: f.x, cy: f.y, r: f.r, fill: 'rgba(76,141,255,.03)', stroke: 'rgba(255,255,255,.05)', 'stroke-width': 1
+    }))
+    var t = el('text', {
+      x: f.x, y: f.y + f.r + 15, fill: '#4e5766', 'font-size': 8.5, 'text-anchor': 'middle',
+      'letter-spacing': '.12em', stroke: '#0c0e11', 'stroke-width': 3, 'paint-order': 'stroke'
+    })
+    t.textContent = f.project.toUpperCase()
+    s.gStatic.appendChild(t)
+  })
+
+  live().forEach(function (a) {
+    var c = s.cells[a.id]; if (!c) return
+    var col = colorOf(a.status)
+    var since = now - (lastAct[a.id] || now)
+    var act = Math.max(0.12, 1 - Math.min(1, since / 240000))
+    s.gStatic.appendChild(el('path', { d: hexPath(c.x, c.y, c.r), fill: 'rgba(0,0,0,.28)', stroke: col, 'stroke-width': 1.5, opacity: 0.85 }))
+    /* the inner hexagon is the level: there is no number, there is size */
+    s.gStatic.appendChild(el('path', { d: hexPath(c.x, c.y, c.r * 0.22 + c.r * 0.6 * act), fill: col, opacity: 0.16 + act * 0.3 }))
+    var t = el('text', {
+      x: c.x, y: c.y + 3.5, fill: '#e6e8eb', 'font-size': 11, 'text-anchor': 'middle',
+      stroke: '#0c0e11', 'stroke-width': 3, 'paint-order': 'stroke'
+    })
+    t.textContent = shortOf(a)
+    s.gStatic.appendChild(t)
+  })
+
+  var FLY = 1100
+  flights.forEach(function (f) {
+    var A = s.cells[f.from], B = s.cells[f.to]
+    if (!A || !B) return
+    var pr = (now - f.born) / FLY
+    if (pr < 0 || pr > 1) return
+    var e = ease(pr)
+    var c = { x: (A.x + B.x) / 2, y: (A.y + B.y) / 2 - Math.abs(B.x - A.x) * 0.1 - 14 }
+    s.gLive.appendChild(el('path', {
+      d: 'M' + A.x + ' ' + A.y + ' Q' + c.x + ' ' + c.y + ' ' + B.x + ' ' + B.y,
+      fill: 'none', stroke: '#e6e8eb', 'stroke-width': 1.6, 'stroke-linecap': 'round', opacity: 0.6 * (1 - pr)
+    }))
+    var pt = qPoint(A, c, B, e)
+    s.gLive.appendChild(el('circle', { cx: pt.x, cy: pt.y, r: 3.4, fill: '#e6e8eb' }))
+    /* the ripple starts when the head arrives, not before */
+    if (pr > 0.85) {
+      var rp = (pr - 0.85) / 0.15
+      s.gLive.appendChild(el('path', {
+        d: hexPath(B.x, B.y, B.r * (1 + rp * 0.9)), fill: 'none',
+        stroke: '#e6e8eb', 'stroke-width': 1.6, opacity: 0.55 * (1 - rp)
+      }))
+    }
+  })
+}
+
+/* =====================================================================
+ * E4 · STREAM
+ * ===================================================================== */
+
+var flow = { host: document.getElementById('cFlow') }
+
+function buildFlow() {
+  var h = flow.host
+  h.innerHTML = ''
+  var W = h.clientWidth || 1100, H = 430
+  var svg = el('svg', { width: '100%', height: H, viewBox: '0 0 ' + W + ' ' + H })
+  h.appendChild(svg)
+  flow.svg = svg; flow.W = W; flow.H = H
+  flow.stars = starfield(svg, W, H)
+  flow.glow = withGlow(svg, 2.6)
+  flow.gStatic = el('g', {}); svg.appendChild(flow.gStatic)
+  flow.gDots = el('g', {}); svg.appendChild(flow.gDots)
+  flow.gLive = el('g', { filter: 'url(#' + flow.glow + ')' }); svg.appendChild(flow.gLive)
+
+  /* same per-project clusters as the v1 constellation */
+  var groups = grouped()
+  var cx = W / 2, cy = H / 2
+  var rx = W * 0.33, ry = H * 0.32
+  flow.pos = {}
+  groups.forEach(function (g, gi) {
+    var ang = -Math.PI / 2 + (gi / groups.length) * TAU
+    var gx = cx + Math.cos(ang) * rx, gy = cy + Math.sin(ang) * ry
+    var perp = ang + Math.PI / 2
+    g.agents.forEach(function (a, ai) {
+      var off = (ai - (g.agents.length - 1) / 2) * 74
+      flow.pos[a.id] = { x: gx + Math.cos(perp) * off, y: gy + Math.sin(perp) * off, ang: ang, idx: ai }
+    })
+  })
+
+  /* The particles are created ONCE and after that only their cx/cy moves.
+   * Creating and destroying two hundred nodes per frame is what makes a thing
+   * like this stutter on a laptop at half battery. */
+  flow.parts = []
+  while (flow.gDots.firstChild) flow.gDots.removeChild(flow.gDots.firstChild)
+  for (var i = 0; i < 240; i++) {
+    var d = el('circle', { r: 1.5, fill: '#e6e8eb', opacity: 0 })
+    flow.gDots.appendChild(d)
+    flow.parts.push(d)
+  }
+}
+
+function drawFlow() {
+  var s = flow
+  if (!s.svg) return
+  while (s.gStatic.firstChild) s.gStatic.removeChild(s.gStatic.firstChild)
+  while (s.gLive.firstChild) s.gLive.removeChild(s.gLive.firstChild)
+  s.stars.setAttribute('transform', 'translate(' + ((now / 1300) % 34 - 34) + ',0)')
+
+  var w = pairs()
+  var keys = Object.keys(w).filter(function (k) {
+    var ab = k.split('|'); return s.pos[ab[0]] && s.pos[ab[1]]
+  })
+
+  /* the bed of each river */
+  var lanes = keys.map(function (k) {
+    var ab = k.split('|')
+    var A = s.pos[ab[0]], B = s.pos[ab[1]]
+    var mx = (A.x + B.x) / 2, my = (A.y + B.y) / 2
+    var dx = B.x - A.x, dy = B.y - A.y
+    var c = { x: mx - dy * 0.14, y: my + dx * 0.14 }
+    s.gStatic.appendChild(el('path', {
+      d: 'M' + A.x + ' ' + A.y + ' Q' + c.x + ' ' + c.y + ' ' + B.x + ' ' + B.y,
+      fill: 'none', stroke: 'rgba(230,232,235,.055)', 'stroke-width': 1
+    }))
+    return { A: A, B: B, c: c, w: w[k] }
+  })
+
+  /* nodes */
+  live().forEach(function (a) {
+    var p = s.pos[a.id]; if (!p) return
+    var col = colorOf(a.status)
+    s.gStatic.appendChild(el('circle', { cx: p.x, cy: p.y, r: 8, fill: '#0f1216', stroke: col, 'stroke-width': 1.6 }))
+    s.gStatic.appendChild(el('circle', { cx: p.x, cy: p.y, r: 3, fill: col }))
+    var stair = (p.idx % 2) * 30
+    var below = Math.sin(p.ang) >= -0.2
+    var ty = below ? p.y + 24 + stair : p.y - 16 - stair
+    var t = el('text', {
+      x: p.x, y: ty, fill: '#e6e8eb', 'font-size': 10.5, 'text-anchor': 'middle',
+      stroke: '#0c0e11', 'stroke-width': 3, 'paint-order': 'stroke'
+    })
+    t.textContent = shortOf(a)
+    s.gStatic.appendChild(t)
+    var t2 = el('text', {
+      x: p.x, y: ty + 12, fill: '#626c7d', 'font-size': 8.5, 'text-anchor': 'middle',
+      stroke: '#0c0e11', 'stroke-width': 3, 'paint-order': 'stroke'
+    })
+    t2.textContent = a.project
+    s.gStatic.appendChild(t2)
+  })
+
+  /* particles: the pool is shared out by each river's flow rate */
+  var totalW = 0
+  lanes.forEach(function (l) { totalW += l.w })
+  var pi = 0
+  lanes.forEach(function (l, li) {
+    var n = totalW ? Math.max(3, Math.round(s.parts.length * 0.8 * (l.w / totalW))) : 0
+    for (var i = 0; i < n && pi < s.parts.length; i++, pi++) {
+      var t = ((now / 5200) + (i / n) + li * 0.31) % 1
+      var pt = qPoint(l.A, l.c, l.B, t)
+      var d = s.parts[pi]
+      d.setAttribute('cx', pt.x); d.setAttribute('cy', pt.y)
+      d.setAttribute('opacity', (0.1 + 0.22 * Math.sin(t * Math.PI)).toFixed(3))
+    }
+  })
+  for (; pi < s.parts.length; pi++) s.parts[pi].setAttribute('opacity', 0)
+
+  /* a real message's bolus: it overtakes the current and carries light */
+  var FLY = 1500
+  flights.forEach(function (f) {
+    var A = s.pos[f.from], B = s.pos[f.to]
+    if (!A || !B) return
+    var pr = (now - f.born) / FLY
+    if (pr < 0 || pr > 1) return
+    var mx = (A.x + B.x) / 2, my = (A.y + B.y) / 2
+    var dx = B.x - A.x, dy = B.y - A.y
+    var c = { x: mx - dy * 0.14, y: my + dx * 0.14 }
+    var e = ease(pr)
+    for (var k = 0; k < 5; k++) {
+      var tt = Math.max(0, e - k * 0.035)
+      var pt = qPoint(A, c, B, tt)
+      s.gLive.appendChild(el('circle', {
+        cx: pt.x, cy: pt.y, r: 3.4 - k * 0.55, fill: '#e6e8eb', opacity: (1 - k * 0.18) * (1 - pr * 0.55)
+      }))
+    }
+  })
+}
+
+/* =====================================================================
+ * Loop
+ * ===================================================================== */
+
+function rebuild() { buildRing(); buildOrbit(); buildHex(); buildFlow() }
+
+function frame(ts) {
+  var dt = ts - last
+  last = ts
+  if (playing) {
+    now += dt
+    tickActivity()
+    if (now >= nextEmit && !quiet) emit(false)
+  }
+  flights = flights.filter(function (f) { return now - f.born < 1700 })
+
+  var q = live().filter(function (a) { return now - (lastAct[a.id] || now) > IDLE_FULL }).length
+  document.getElementById('clock').textContent =
+    new Date(now).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) +
+    ' · ' + q + ' in the dead zone'
+
+  drawRing(); drawOrbit(); drawHex(); drawFlow()
+  requestAnimationFrame(frame)
+}
+
+document.getElementById('tPlay').addEventListener('click', function () {
+  playing = !playing
+  this.classList.toggle('on', playing)
+  this.textContent = playing ? '⏸ Pause' : '▶ Resume'
+})
+document.getElementById('tMany').addEventListener('click', function () {
+  many = !many
+  this.classList.toggle('on', many)
+  live().forEach(function (a) { if (lastAct[a.id] === undefined) lastAct[a.id] = now - Math.random() * 400000 })
+  rebuild()
+})
+document.getElementById('tBurst').addEventListener('click', function () {
+  for (var i = 0; i < 5; i++) (function (k) { setTimeout(function () { emit(true) }, k * 240) })(i)
+})
+document.getElementById('tQuiet').addEventListener('click', function () {
+  quiet = !quiet
+  this.classList.toggle('on', quiet)
+})
+document.getElementById('tCalm').addEventListener('click', function () {
+  var on = document.body.classList.toggle('calm')
+  this.classList.toggle('on', on)
+})
+window.addEventListener('resize', rebuild)
+
+seed()
+rebuild()
+requestAnimationFrame(frame)
+</script>
+
+</body>
+</html>

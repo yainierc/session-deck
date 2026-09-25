@@ -1,0 +1,379 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sidebar menu — design v3 · the frame on the project</title>
+<style>
+/*
+ * Sidebar menu — v3. Decided so far:
+ *
+ *   v1 → the row is option B: name, "new task" and a ⋯ menu.
+ *   v2 → the nesting is N3: each project and its sessions in one block.
+ *   v3 → the "you are here" frame moves from the session row to the project
+ *        block, which is what kills the frame-inside-a-frame.
+ *
+ * What that decision opens up, and the only thing this page decides:
+ *
+ *   If the frame moves to the project and the project has two sessions, how
+ *   do you know WHICH one you are in? The frame names the branch; the leaf
+ *   is still unnamed.
+ *
+ * What the four proposals argue:
+ *
+ * 1. ONE FRAME ONLY. That was the problem: two nested blue borders. So the
+ *    border belongs to the block and the session is marked WITHOUT a border —
+ *    with a fill, with weight or with a bar, but never with another frame.
+ *
+ * 2. THE FRAME NAMES THE BRANCH, THE FILL NAMES THE LEAF. They are two
+ *    different questions — "which project am I looking at something in" and
+ *    "what am I looking at" — and that is why they can coexist without
+ *    competing.
+ *
+ * 3. THERE ARE TWO "ACTIVES" AND THEY LOOK DANGEROUSLY ALIKE. Opening a
+ *    project's page is not the same as opening one of its sessions. Both
+ *    light up the block; what separates them is what lights up inside: the
+ *    header or the session. If this is not settled in the mockup, it gets
+ *    settled badly in the code.
+ */
+
+:root {
+  --bg: #0c0e11;
+  --panel: #14171c;
+  --panel-2: #1a1e25;
+  --line: #252a33;
+  --text: #e6e8eb;
+  --muted: #8b94a3;
+  --dim: #626c7d;
+  --accent: #4c8dff;
+  --waiting: #f0a83c;
+  --busy: #4c8dff;
+  --idle: #3fb950;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: radial-gradient(1200px 600px at 50% -240px, rgba(76,141,255,0.05), transparent 70%), var(--bg);
+  color: var(--text);
+  font: 14px/1.55 ui-sans-serif, -apple-system, "Segoe UI", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+.stage { max-width: 1280px; margin: 0 auto; padding: 26px 28px 120px; }
+h1 { margin: 0 0 6px; font-size: 21px; letter-spacing: -0.02em; }
+
+/* The "this is history" stamp. It goes on top and not in a footnote because its
+   job is to be read before the rest of the page. */
+.frozen {
+  margin: 0 0 16px;
+  padding: 9px 13px;
+  background: rgba(240, 168, 60, 0.09);
+  border: 1px solid rgba(240, 168, 60, 0.3);
+  border-radius: 8px;
+  color: #d9c49b;
+  font-size: 12.5px;
+  line-height: 1.55;
+  max-width: 82ch;
+}
+.frozen b { color: #ffc978; font-weight: 600; }
+
+.sub { margin: 0 0 8px; color: var(--muted); font-size: 13.5px; max-width: 82ch; }
+h2 { margin: 40px 0 4px; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; color: var(--dim); }
+h2 + .lead { margin: 0 0 18px; color: var(--muted); font-size: 13.5px; max-width: 80ch; }
+code { font-family: var(--mono); font-size: 0.9em; background: var(--bg); padding: 1px 5px; border-radius: 4px; }
+
+.trail { display: flex; gap: 8px; flex-wrap: wrap; margin: 0 0 26px; }
+.trail span { font-size: 11.5px; color: var(--dim); border: 1px solid var(--line); border-radius: 999px; padding: 3px 10px; }
+.trail span b { color: var(--muted); font-weight: 600; }
+
+.toolbar { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; margin: 0 0 18px; font-size: 13px; color: var(--muted); }
+.toolbar label { display: inline-flex; align-items: center; gap: 7px; cursor: pointer; }
+
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(310px, 1fr)); gap: 22px; align-items: start; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+.card.is-pick { border-color: rgba(76,141,255,0.5); box-shadow: 0 0 0 1px rgba(76,141,255,0.18); }
+.card-head { padding: 13px 15px 11px; border-bottom: 1px solid var(--line); }
+.card-head h3 { margin: 0; font-size: 14px; display: flex; align-items: center; gap: 8px; }
+.tag { font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.07em; font-weight: 700; background: var(--accent); color: #061020; border-radius: 999px; padding: 1px 7px; }
+.card-head p { margin: 6px 0 0; color: var(--muted); font-size: 12.5px; }
+.card-body { padding: 14px; }
+.legend { margin: 11px 2px 0; font-size: 11.5px; line-height: 1.5; color: var(--dim); }
+.legend b { color: var(--muted); font-weight: 600; }
+.note { padding: 11px 15px 13px; border-top: 1px solid var(--line); font-size: 12.5px; color: var(--muted); }
+.note p { margin: 0 0 5px; }
+.note .pro::before { content: "+ "; color: var(--idle); font-weight: 700; }
+.note .con::before { content: "− "; color: #ff8f8f; font-weight: 700; }
+
+/* ---------- the menu, N3 base + row B ---------- */
+
+.side { width: 300px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 8px; user-select: none; }
+
+.project {
+  background: rgba(255,255,255,0.022);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  padding: 4px 5px 6px;
+  margin-bottom: 8px;
+}
+.project:last-child { margin-bottom: 0; }
+
+/*
+ * The lit block. It is the only blue border left in the menu: whatever is
+ * inside gets marked without a frame.
+ */
+.project.here {
+  border-color: rgba(76,141,255,0.45);
+  background: rgba(76,141,255,0.055);
+}
+
+.head { display: flex; align-items: center; gap: 3px; min-height: 24px; border-radius: 6px; padding: 1px 1px 1px 0; }
+.chev { flex: none; width: 20px; height: 20px; display: inline-flex; align-items: center; justify-content: center; background: none; border: 0; color: var(--dim); cursor: pointer; }
+.pname { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; padding: 0 2px 0 3px; background: none; border: 0; cursor: pointer; text-align: left; color: var(--muted); font: inherit; font-size: 12.5px; font-weight: 600; }
+.here .pname { color: #cfe0ff; }
+.plabel { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.badge { flex: none; background: var(--waiting); color: #1a1205; border-radius: 999px; padding: 0 6px; font-size: 10.5px; font-weight: 700; line-height: 16px; }
+.btn { flex: none; width: 22px; height: 22px; display: inline-flex; align-items: center; justify-content: center; background: transparent; border: 1px solid transparent; border-radius: 5px; color: var(--dim); font-size: 15px; line-height: 1; cursor: pointer; }
+.btn:hover { background: var(--panel-2); border-color: var(--line); color: var(--accent); }
+
+.path { padding: 0 8px 6px 8px; font-size: 11px; color: var(--dim); font-family: var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kids { padding-left: 8px; }
+
+.row { display: flex; align-items: center; gap: 8px; width: 100%; padding: 7px 8px; margin-bottom: 2px; background: transparent; border: 0; border-radius: 6px; color: var(--text); font: inherit; font-size: 13px; text-align: left; cursor: pointer; }
+.row:hover { background: rgba(255,255,255,0.045); }
+.rname { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rname .pre { color: var(--dim); }
+.meta { color: var(--dim); font-size: 11px; white-space: nowrap; }
+.dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+.dot.idle { background: var(--idle); }
+.dot.busy { background: var(--busy); }
+.dot.waiting { background: var(--waiting); }
+.empty { margin: 2px 0 2px 8px; font-size: 11.5px; color: var(--dim); font-style: italic; }
+
+/* The project page open: the header lights up, not a session. */
+.project.page > .head { background: rgba(76,141,255,0.16); }
+.project.page .pname { color: #fff; }
+
+/* =====================================================================
+   A · the session, filled
+   ===================================================================== */
+.va .row.on { background: rgba(76,141,255,0.24); }
+.va .row.on .rname { color: #fff; font-weight: 600; }
+
+/* =====================================================================
+   B · the session, in the text only
+   ===================================================================== */
+.vb .row.on .rname { color: #fff; font-weight: 600; }
+.vb .row.on .dot { box-shadow: 0 0 0 3px rgba(76,141,255,0.30); }
+
+/* =====================================================================
+   C · the session, with a bar
+   ===================================================================== */
+.vc .row.on { box-shadow: inset 2px 0 0 var(--accent); background: rgba(76,141,255,0.10); }
+.vc .row.on .rname { color: #fff; font-weight: 600; }
+
+/* =====================================================================
+   D · fill + lit header
+   ===================================================================== */
+.vd .project.here > .head { background: rgba(76,141,255,0.14); }
+.vd .project.here .pname { color: #fff; }
+.vd .row.on { background: rgba(76,141,255,0.24); }
+.vd .row.on .rname { color: #fff; font-weight: 600; }
+
+/* ---------- switches ---------- */
+
+body.dim-prefix .pre { color: var(--dim); }
+body:not(.dim-prefix) .pre { color: inherit; }
+
+.rec { background: linear-gradient(180deg, rgba(76,141,255,0.08), transparent 60%), var(--panel); border: 1px solid rgba(76,141,255,0.35); border-radius: 12px; padding: 18px 20px; }
+.rec ol { margin: 10px 0 0; padding-left: 20px; color: var(--muted); font-size: 13.5px; }
+.rec li { margin: 7px 0; }
+.rec li b { color: var(--text); font-weight: 600; }
+</style>
+</head>
+<body class="dim-prefix">
+<div class="stage">
+
+  <h1>Sidebar menu — v3 · the frame, on the project</h1>
+  <p class="frozen">
+    <b>24 Sep 2026 · decided: A, the filled session · implemented.</b>
+    What this page proposes is already in the panel: the block carries the only
+    frame and the open session is filled. It is kept for the four alternatives and
+    for the case it uncovered — that opening a project's page and opening one of
+    its sessions are two different "actives".
+  </p>
+  <p class="sub">
+    The project block takes the blue frame and the session loses its own: no more
+    frame inside a frame. What has to be decided here is what that decision leaves
+    open.
+  </p>
+  <div class="trail">
+    <span><b>v1</b> · the row: name, + and ⋯</span>
+    <span><b>v2</b> · the nesting: block</span>
+    <span><b>v3</b> · where "you are here" lives</span>
+  </div>
+
+  <h2>The question that moving the frame opens</h2>
+  <p class="lead">
+    If the frame moves to the project and the project has two sessions, the menu
+    says which branch you are looking at something in but not which leaf. In all
+    four proposals the block carries the menu's only blue border and the session is
+    marked <b>without a frame</b>: with a fill, with weight or with a bar. What
+    changes is how much.
+  </p>
+  <p class="lead">
+    And there is a second case worth looking at here instead of discovering it in
+    the code: <b>opening a project's page is not the same as opening one of its
+    sessions</b>. Both light up the block. What separates them is what lights up
+    inside — the header or the row. The third project in each mockup is that case.
+  </p>
+
+  <div class="toolbar">
+    <label><input type="checkbox" id="pref" checked> Dim the repeated prefix (<code>github-acmeplatform-</code><b>25</b>)</label>
+    <label><input type="checkbox" id="many"> Project with four sessions</label>
+  </div>
+
+  <div class="grid" id="grid"></div>
+
+  <h2>What I would implement</h2>
+  <div class="rec">
+    <ol>
+      <li><b>One blue border in the whole menu</b>, and the project block carries it.
+      That was N3's complaint, and it is fixed by taking the frame off the session,
+      not by adding contrast.</li>
+      <li><b>The frame names the branch; the fill names the leaf.</b> Inside the lit
+      block, the session you are looking at is filled in solid blue, in white text.
+      No border, no bar: in a 280 px block, a fill is already unmistakable.</li>
+      <li><b>Opening the project page lights up the header</b>, not a session. Same lit
+      block, different row inside. That way the two things called "active" today
+      stop looking alike.</li>
+      <li><b>Amber survives intact.</b> A session waiting on you keeps its dot and its
+      badge inside the block, whether the block is lit or not: blue says where you
+      are, amber says where you are needed, and they still do not compete.</li>
+      <li><b>Without the per-row frame, the list breathes.</b> The block already groups,
+      so the session needs no border of its own — and the menu goes from eight boxes
+      with sub-boxes to eight boxes with rows.</li>
+    </ol>
+  </div>
+
+</div>
+
+<script>
+const BASE = [
+  {
+    name: 'GITHUB-AcmePlatform', path: '~/work/GITHUB-AcmePlatform', waiting: 1, here: true,
+    sessions: [
+      { name: 'github-acmeplatform-25', dot: 'idle', meta: 'idle', on: true },
+      { name: 'github-acmeplatform-9b', dot: 'waiting', meta: 'Write' },
+    ],
+  },
+  {
+    name: 'session-deck', path: '~/code/session-deck',
+    sessions: [
+      { name: 'session-deck-7c', dot: 'busy', meta: 'working' },
+      { name: 'can we show a badge when a session needs me', dot: 'idle', meta: 'idle', own: true },
+    ],
+  },
+  { name: 'GITHUB-AcmeProperty', path: '~/work/GITHUB-AcmeProperty', page: true, sessions: [] },
+]
+
+const EXTRA = [
+  { name: 'github-acmeplatform-3f', dot: 'idle', meta: 'idle' },
+  { name: 'github-acmeplatform-c1', dot: 'busy', meta: 'working' },
+]
+
+const VARIANTS = [
+  { id: 'va', title: 'A · The session, filled', tag: 'proposal', pick: true,
+    desc: 'The block carries the frame; inside it, the session you are looking at is filled in solid blue. A fill is not a frame, so there is no competition.',
+    pros: ['Unmistakable at a glance, even with four sessions inside.', 'One border in the whole menu.'],
+    cons: ['Two blues at once — the one on the block and the one on the fill — force you to pick both shades well.'] },
+  { id: 'vb', title: 'B · The text only', desc: 'The session does not change its background: it just turns white and its dot gains a halo. As quiet as it gets.',
+    pros: ['The menu ends up spotless: a single painted element in the whole column.'],
+    cons: ['With four sessions, "whiter than the others" is a difference you have to hunt for.', 'On mobile, at arm\'s length, you can barely see it.'] },
+  { id: 'vc', title: 'C · A thin bar', desc: 'A very faint fill and a 2 px bar to the left of the row — the rest of the marking used today, minus the border.',
+    pros: ['Keeps the bar you already know from the current panel.'],
+    cons: ['The bar inside the block hints at a frame again: it is half of the very complaint we came to remove.', 'It competes with the indent, which already uses that same left edge to say "inside".'] },
+  { id: 'vd', title: 'D · Block, header and session', desc: 'Everything lit at once: frame, header in blue and filled session.',
+    pros: ['Impossible to get lost.'],
+    cons: ['Three marks for a single fact.', 'The lit header is what means "I am looking at the project page": using it here too erases that difference.'] },
+]
+
+function split(projectName, sessionName) {
+  const slug = projectName.toLowerCase().replace(/[^a-z0-9]+/g, '-')
+  if (sessionName.toLowerCase().startsWith(slug + '-')) {
+    return { pre: sessionName.slice(0, slug.length + 1), rest: sessionName.slice(slug.length + 1) }
+  }
+  return { pre: '', rest: sessionName }
+}
+
+function label(project, s) {
+  if (s.own) return s.name
+  const { pre, rest } = split(project.name, s.name)
+  return pre ? `<span class="pre">${pre}</span>${rest}` : s.name
+}
+
+const ICON = {
+  chev: '<svg viewBox="0 0 10 10" width="9" height="9"><path d="M2 3.5 L5 6.5 L8 3.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  dots: '<svg viewBox="0 0 14 14" width="13" height="13"><circle cx="7" cy="3" r="1.15" fill="currentColor"/><circle cx="7" cy="7" r="1.15" fill="currentColor"/><circle cx="7" cy="11" r="1.15" fill="currentColor"/></svg>',
+}
+
+function sideHtml(variant, many) {
+  const projects = BASE.map((p, i) => (i === 0 && many) ? { ...p, sessions: [...p.sessions, ...EXTRA] } : p)
+  return `
+    <div class="side ${variant}">
+      ${projects.map((p) => `
+        <section class="project ${p.here ? 'here' : ''} ${p.page ? 'here page' : ''}">
+          <div class="head">
+            <button class="chev">${ICON.chev}</button>
+            <span class="pname"><span class="plabel">${p.name}</span>${p.waiting ? `<span class="badge">${p.waiting}</span>` : ''}</span>
+            <button class="btn" title="New task">+</button>
+            <button class="btn" title="More">${ICON.dots}</button>
+          </div>
+          <div class="kids">
+            <div class="path">${p.path}</div>
+            ${p.sessions.length === 0
+              ? '<p class="empty">no sessions</p>'
+              : p.sessions.map((s) => `
+                  <button class="row ${s.on ? 'on' : ''}">
+                    <span class="dot ${s.dot}"></span>
+                    <span class="rname">${label(p, s)}</span>
+                    <span class="meta">${s.meta}</span>
+                  </button>`).join('')}
+          </div>
+        </section>`).join('')}
+    </div>`
+}
+
+function paint() {
+  const many = document.getElementById('many').checked
+  document.getElementById('grid').innerHTML = VARIANTS.map((v) => `
+    <article class="card ${v.pick ? 'is-pick' : ''}">
+      <div class="card-head">
+        <h3>${v.title}${v.tag ? `<span class="tag">${v.tag}</span>` : ''}</h3>
+        <p>${v.desc}</p>
+      </div>
+      <div class="card-body">
+        ${sideHtml(v.id, many)}
+        <!-- Mockup annotation, not part of the design: in the real panel only
+             one of the two states can be true at a time. -->
+        <p class="legend">
+          Top, <b>looking at a session</b> of that project. Bottom, <b>looking at the
+          page</b> of the project. In the panel only one of the two happens at a time;
+          here they sit together so you can compare them.
+        </p>
+      </div>
+      <div class="note">
+        ${v.pros.map((t) => `<p class="pro">${t}</p>`).join('')}
+        ${v.cons.map((t) => `<p class="con">${t}</p>`).join('')}
+      </div>
+    </article>`).join('')
+}
+
+document.getElementById('many').addEventListener('change', paint)
+document.getElementById('pref').addEventListener('change', (e) => {
+  document.body.classList.toggle('dim-prefix', e.target.checked)
+})
+paint()
+</script>
+</body>
+</html>

@@ -55,6 +55,13 @@ function runGit(cwd, args, input) {
       if (!err) return resolve(stdout)
       resolve(err.code === 1 ? '' : null)
     })
+    // Writing to a child that has already gone raises EPIPE, and an unhandled
+    // 'error' on a stream takes the whole process with it. Losing that race is
+    // normal rather than exceptional: `check-ignore` exits the moment it has
+    // its answer, which can be before this write lands. The exec callback
+    // above still resolves with whatever git managed to say, so there is
+    // nothing to report here — only a crash to decline.
+    child.stdin.on('error', () => {})
     child.stdin.end(input ?? '')
   })
 }

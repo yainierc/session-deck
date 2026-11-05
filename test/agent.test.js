@@ -971,7 +971,14 @@ test('a launched session has the Artifact tools, which the SDK turns off by defa
     agents.launch({ cwd: '/tmp', prompt: 'update the artifact' })
     assert.equal(seen.options.env.CLAUDE_CODE_ARTIFACT, '1')
     // `env` replaces the child's environment: without PATH it finds no git.
-    assert.equal(seen.options.env.PATH, process.env.PATH)
+    //
+    // Looked up without regard to case, because `process.env` is a special
+    // object on Windows that answers to any spelling, and spreading it into a
+    // plain one freezes whichever spelling Windows used — `Path`. The child
+    // is fine either way, since Windows does not distinguish them; only a
+    // test reading `.PATH` off the copy would be.
+    const envPath = Object.entries(seen.options.env).find(([k]) => k.toUpperCase() === 'PATH')?.[1]
+    assert.equal(envPath, process.env.PATH)
 
     // Turned off in the shell that started the deck stays off.
     process.env.CLAUDE_CODE_ARTIFACT = '0'

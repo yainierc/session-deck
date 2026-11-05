@@ -107,6 +107,15 @@ server.listen(opts.port, opts.host, () => {
   // short of reading a JSON file out of their home directory.
   console.log(`\n  locked. open this to pair this browser:\n  ${url}`)
 
+  // Said once, at the only moment anyone is reading this output, and only
+  // where it is true. The lock is worth exactly as much as the file the key
+  // is kept in, so a deck that cannot restrict that file should say so rather
+  // than let the word "locked" above do the reassuring.
+  if (!auth.keyIsPrivate()) {
+    console.log(`\n  note: this platform has no file permissions to set, so the key file is`)
+    console.log(`  readable by every account on this machine. Fine alone, not on a shared one.`)
+  }
+
   // A QR is only worth drawing when something could scan it and arrive.
   // Either this port is open to the network, or something in front of it is
   // forwarding here and was named with --public-url. Printing a code that

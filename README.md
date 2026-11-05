@@ -195,6 +195,7 @@ The five real differences between platforms:
 | Process alive or dead | `process.kill(pid, 0)`, which behaves the same everywhere. The output of `ps` is never parsed. |
 | Ending someone else's process | `SIGTERM`, then `SIGKILL` on Unix. Windows has no graceful signal for a console process you did not start, so it is `taskkill /T /F`. |
 | Native notification | The only per-platform branch: `osascript` on Mac, a PowerShell toast on Windows, `notify-send` on Linux. |
+| Keeping the key private | `0600` on Unix. **Windows has no permission bits** — `chmod` there flips the read-only attribute and reports success — so the key file stays readable by every account on the machine. The deck checks what the file system actually did instead of assuming, and says so at startup when it could not lock it. Fine on a machine that is yours; think twice on a shared one. |
 
 And one trap: on Windows the binary is `claude.cmd` and only starts with
 `shell: true`. That is already handled in `spawnClaude()`.

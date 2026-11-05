@@ -27,6 +27,28 @@ function request({ headers = {}, target = '/api/state' } = {}) {
   return [{ headers }, new URL(target, 'http://localhost')]
 }
 
+/**
+ * The key file is as private as the platform allows, and the deck's own
+ * account of that matches the file system.
+ *
+ * Where there are permission bits the answer is 0600 and nothing looser.
+ * Windows has none — chmod there flips the read-only attribute and returns
+ * happily — so the file stays readable by other accounts and the thing worth
+ * asserting is that `keyIsPrivate()` reports it, because a deck that believes
+ * it locked a file it did not is how a shared machine gets surprised.
+ */
+function assertKeyFilePrivacy(file) {
+  const mode = fs.statSync(file).mode & 0o777
+  const openToOthers = (mode & 0o077) !== 0
+  assert.equal(
+    auth.keyIsPrivate(), !openToOthers,
+    'the deck and the file system disagree about whether the key is private',
+  )
+  if (process.platform !== 'win32') {
+    assert.equal(mode, 0o600, 'the key file is readable by other accounts')
+  }
+}
+
 test('a token is minted, persisted, and kept private', () => {
   const value = auth.token()
   assert.ok(value.length >= 32, 'token is too short to be worth having')
@@ -36,7 +58,13 @@ test('a token is minted, persisted, and kept private', () => {
   assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).token, value)
 
   // 0600. A token every account on a shared machine can read is not a token.
-  assert.equal(fs.statSync(file).mode & 0o777, 0o600)
+  //
+  // Windows has no permission bits to set: chmod there flips the read-only
+  // attribute and reports success. So what is asserted is not "the bits are
+  // 0600 everywhere" — which is false — but that the deck's own account of
+  // itself matches the file system. A deck that thinks it locked a file it
+  // did not is the failure worth catching; the exposure is reported at start.
+  assertKeyFilePrivacy(file)
 })
 
 test('rotating invalidates the old token and rewrites it privately', () => {
@@ -49,7 +77,33 @@ test('rotating invalidates the old token and rewrites it privately', () => {
 
   // The mode argument to writeFileSync is ignored when the file already
   // exists, so this asserts the chmod that covers for it.
-  assert.equal(fs.statSync(path.join(SCRATCH, 'auth.json')).mode & 0o777, 0o600)
+  assertKeyFilePrivacy(path.join(SCRATCH, 'auth.json'))
+})
+
+test('a key file left readable is reported, on the start that only reads it', async (t) => {
+  // The bits are the point, so there is nothing to assert where they do not
+  // exist. Windows is covered by the deck agreeing with the file system in
+  // the two tests above.
+  if (process.platform === 'win32') return t.skip('no permission bits on Windows')
+
+  // A deck that has already been started once: the key is on disk, and this
+  // run will read it rather than write it. The file is loosened the way a
+  // careless `cp`, an unpacked backup or an older build would have left it.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'deck-auth-loose-'))
+  fs.writeFileSync(path.join(dir, 'auth.json'), JSON.stringify({ token: 'x'.repeat(40), pin: null }))
+  fs.chmodSync(path.join(dir, 'auth.json'), 0o644)
+
+  // A second copy of the module, with its own cache, pointed at that
+  // directory: the first one has already cached a key from its own scratch.
+  const before = process.env.SESSION_DECK_DIR
+  process.env.SESSION_DECK_DIR = dir
+  try {
+    const fresh = await import('../src/auth.js?loose')
+    assert.equal(fresh.token(), 'x'.repeat(40), 'the existing key was read, not replaced')
+    assert.equal(fresh.keyIsPrivate(), false, 'a world-readable key file was reported as private')
+  } finally {
+    process.env.SESSION_DECK_DIR = before
+  }
 })
 
 test('a request with no credential is refused', () => {

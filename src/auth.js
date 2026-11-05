@@ -38,6 +38,25 @@ function file() {
  */
 let cached = null
 
+/**
+ * Whether the file holding the key is readable only by this account.
+ *
+ * Starts true because that is what it is on a platform with permission bits
+ * and nothing has failed yet; `save()` replaces it with what the file system
+ * actually reports. Null means no file: the key is in memory for this run
+ * only, so there is nothing on disk to expose.
+ */
+let restricted = true
+
+/**
+ * Could the key file be locked down? False means it is sitting there readable
+ * by every account on this machine, which is worth saying out loud on a
+ * machine you share. See `save()` for why that happens.
+ */
+export function keyIsPrivate() {
+  return restricted
+}
+
 function generate() {
   // 256 bits from the CSPRNG. base64url so it survives a URL, a QR code and a
   // cookie without escaping.
@@ -61,6 +80,11 @@ function load() {
     // paired devices, which is the safe direction to fail in.
     if (typeof data.token === 'string' && data.token.length >= 32) {
       cached = { token: data.token, pin: readPin(data.pin) }
+      // Measured here too, and not only in `save()`. Every start after the
+      // first reads an existing key and never writes one, so checking only on
+      // write would leave the second run of the deck reporting a privacy it
+      // had not looked at — on the one platform where the answer is no.
+      restricted = (fs.statSync(file()).mode & 0o077) === 0
       return cached
     }
   } catch {}
@@ -78,6 +102,13 @@ function save(record) {
     // write after the first it is silently ignored, so a file that was ever
     // world-readable would stay world-readable. chmod is the one that binds.
     fs.chmodSync(target, 0o600)
+    // And then check, rather than assume it worked. On Windows there are no
+    // POSIX permission bits: chmod there toggles the read-only flag and
+    // reports success, leaving the file readable by every account on the
+    // machine. Asking the file system what it actually did is the difference
+    // between a deck that knows it is exposed and one that believes a
+    // reassuring comment.
+    restricted = (fs.statSync(target).mode & 0o077) === 0
   } catch {
     // Persisting failed — a read-only home, a full disk. Keep it in memory so
     // this run still works; it just will not survive a restart.

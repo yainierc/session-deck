@@ -672,6 +672,40 @@ kept in the repo would be checked out at a different version inside every
 worktree it is about to create, and the one file that must not fork is the
 plan. Writing one is local-only, the same rule the permission lists follow.
 
+## Plans
+
+A plan is whatever a project already writes down about what it is building.
+The deck does not ask you to adopt a format: it reads the four conventions it
+can recognise, and **never writes to any of them**.
+
+| Convention | Where it looks |
+|---|---|
+| Implementation Plans | `docs/IPs/` |
+| trellis contracts | `.trellis/profile.yml`, with `docs/contracts/` filed by state |
+| deck plans | numbered Markdown files in `docs/plans/` |
+| prose plans | `docs/implementation-plan/`, `docs/plans`, `docs/plan/` |
+
+A repository that writes none of them is reported as writing none of them,
+which is the one case where the deck can start a plan without stepping on
+something. A repository that writes two is read twice: adopting a convention
+rarely means deleting last year's.
+
+Each plan keeps its native identifier beside the shared vocabulary rather than
+instead of it. The board counts in `plan` and `milestone`; the card still says
+the id you would search the repository for.
+
+### Where you left off
+
+The plans screen answers one question — where did I stop — and it answers it
+from the execution log, not from a status somebody typed. Plans that keep one
+come first, longest untouched at the top.
+
+Plans with no log cannot answer it. They are not hidden, because a screen that
+quietly drops two thirds of the work is lying; they drop to a folded section at
+the bottom with their count in the open. Setting a plan aside is a filter over
+what was found, never a delete, and the count above always says how many are
+out of view.
+
 ## Worktree cleanup
 
 Worktrees pile up. The project view says, for each one, whether the work in it
@@ -991,23 +1025,67 @@ the server holding a different one from the file.
 
 ## Architecture
 
+The spine:
+
 ```
+src/cli.js          the session-deck command
+src/server.js       HTTP + WebSocket, notifications
 src/platform.js     everything OS-specific (the only file to check when porting)
 src/auth.js         the pairing key, and who is allowed to ask anything at all
-src/sessions.js     live registry: read, drop dead PIDs, group, watch
-src/transcripts.js  index the .jsonl files, read them, follow them by offset
-src/activity.js     tool calls -> file events, for the working indicator
-src/projects.js     repository root, worktree list, branches
-src/workspace.js    the folders you added, persisted to ~/.session-deck
-src/browse.js       directory listing for the folder picker, local requests only
-src/presets.js      saved task shortcuts
-src/settings.js     deck preferences, including the permission mode
-src/worktree-status.js  has this branch landed? the one place git is shelled out to
-src/inbox.js        the triage queue: everything waiting on you, ranked
 src/claude-auth.js  is the CLI signed in — the one identity the deck cannot run without
+```
+
+Reading what is already on the machine. None of this writes:
+
+```
+src/sessions.js       live registry: read, drop dead PIDs, group, watch
+src/session-store.js  the session files, addressed by id
+src/transcripts.js    index the .jsonl files, read them, follow them by offset
+src/activity.js       tool calls -> file events, for the working indicator
+src/live-agents.js    the subagents a managed session has running right now
+src/projects.js       repository root, worktree list, branches
+src/files.js          the project's own files, for the Files tab
+src/workspace.js      the folders you added, persisted to ~/.session-deck
+src/browse.js         directory listing for the folder picker, local requests only
+src/mcp.js            which MCP servers this workspace has, and which are authenticated
+```
+
+Driving the sessions the deck started:
+
+```
 src/agent.js        the control plane: sessions the deck launches and drives
-src/server.js       HTTP + WebSocket, notifications
-src/cli.js          the session-deck command
+src/choices.js      the model, the effort and the advisor a session starts with
+src/permissions.js  the rules that decide what a session stops to ask about
+src/settings.js     deck preferences, including the permission mode
+src/presets.js      saved task shortcuts
+src/inbox.js        the triage queue: everything waiting on you, ranked
+src/progress.js     the checklist a session keeps about its own work
+```
+
+More than one session at a time:
+
+```
+src/teams.js          the groups you raised, written down
+src/roles.js          the jobs you put people in, not the errands you send them on
+src/teamproposal.js   a team, proposed by a session that did the work
+src/roster.js         who a new session is told it can ask
+src/meeting.js        the conversations sessions have with each other
+src/handoff.js        what the deck hands over to its own successor
+src/handoff-notes.js  the notes one session leaves for the next
+```
+
+Plans, and the repository underneath:
+
+```
+src/plans.js        how each project writes down what it is trying to build
+src/git.js          the one way this deck runs git
+src/worktree-status.js  has this branch landed? the one place git is shelled out to
+src/pull.js         bringing a project up to date with its remote, from a button
+src/forges.js       where a repository's pull requests actually live
+src/ado-identity.js which Azure DevOps identity a project actually works as
+```
+
+```
 web/                React interface
 test/               node --test; the gate is covered from both sides
 ```

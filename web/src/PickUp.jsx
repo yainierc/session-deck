@@ -130,16 +130,6 @@ function Plan({ plan, project, onOpenProject, onHide }) {
               in {plan.elsewhere.name}
             </span>
           )}
-          {/*
-            Where it lives, when that is not where you are. The main checkout
-            can be parked on any branch, so a plan can exist in a worktree and
-            nowhere else — and starting it means going there first.
-          */}
-          {plan.elsewhere && (
-            <span className="pu-else" title={plan.elsewhere.worktree}>
-              in {plan.elsewhere.name}
-            </span>
-          )}
           {plan.owner && <span className="pu-owner">{plan.owner}</span>}
           {/*
             Set aside, not discarded. Nothing is deleted anywhere: it is a
@@ -401,7 +391,6 @@ export default function PickUp({ onOpenProject }) {
                 <span className="pu-qtitle">{plan.title}</span>
                 <span className="pu-qprog">{plan.progress.done}/{plan.progress.total}</span>
                 <span className="pu-qproj">{project.name}</span>
-                {plan.elsewhere && <span className="pu-else">in {plan.elsewhere.name}</span>}
                 {plan.elsewhere && <span className="pu-else">in {plan.elsewhere.name}</span>}
                 <button
                   className="pu-hide"

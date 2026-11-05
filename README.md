@@ -1,5 +1,7 @@
 # session-deck
 
+[![test](https://github.com/yainierc/session-deck/actions/workflows/test.yml/badge.svg)](https://github.com/yainierc/session-deck/actions/workflows/test.yml)
+
 One panel for every Claude Code session you have running, grouped by project,
 with a desktop notification when any of them gets blocked waiting on you.
 
@@ -29,6 +31,12 @@ the key, a bare URL will just ask you for it. See [Pairing](#pairing). And
 `npm start` lives as long as the terminal does; `./deck.sh start` runs it in
 the background instead, independent of the shell and of VS Code, with `stop`,
 `restart`, `status` and `logs` alongside it.
+
+`deck.sh` is the one part of this that is not portable: it is a bash script,
+and it reaches for `pgrep`, `nohup` and `curl`. On Windows use `npm start` and
+leave the terminal open, or run the script from Git Bash or WSL. Everything
+else — the server, the tests, the build — is Node, and
+[CI runs it on Windows, macOS and Linux](../../actions/workflows/test.yml).
 
 `npm link` from the clone puts `session-deck` on your PATH as a command.
 
@@ -191,8 +199,15 @@ The five real differences between platforms:
 And one trap: on Windows the binary is `claude.cmd` and only starts with
 `shell: true`. That is already handled in `spawnClaude()`.
 
-> Tested on macOS. The Windows and Linux paths are written in the portable
-> form but have not been executed on those platforms yet.
+> **What is actually verified.** The test suite and the build run on Windows,
+> macOS and Linux on every push, against the two ends of the supported Node
+> range. That covers the logic, and it is why the badge above means something.
+>
+> It does not cover the parts only a person can see: the native notification,
+> the folder dialog, opening a terminal, and `deck.sh` itself, which is bash.
+> Those are written per platform and exercised daily on macOS only. If you run
+> the deck on Windows or Linux and one of them misbehaves, that is a real bug
+> and worth an issue — you are the first person there.
 
 ## What it shows, and what it does not
 
@@ -869,6 +884,50 @@ that derived title in the same field as the real one — so the deck reads the
 `custom-title` record in the session file instead, and a session nobody has
 named keeps the name the registry gave it, and the sidebar never shows you a
 name you did not type.
+
+## Teams and roles
+
+A **role** is a standing brief. A task shortcut is not: "Review my changes" is
+finished when the review is written, and the session that ran it has nothing
+left to be. "Backend" is not finished when the migration lands — it is what
+that session is *for* as long as the team exists, and it is what the others
+address when they need the API explained.
+
+So a role says how to behave rather than what to produce, and what it is
+actually working on arrives separately, as the team's goal. Writing the task
+into the role is how you end up with one role per project per sprint.
+
+A **team** is the group you raised, and the project each seat sits in. What
+gets written down is the smallest thing that answers *who is in this*: the
+session ids, and who hands out the work. The name on screen, the project,
+whether a session is busy or stopped or waiting on you — none of that is
+stored, because all of it changes and none of it would stay true in a file. It
+is looked up live from the session list.
+
+### Two ways in
+
+Composing a team by hand asks you to know the answer before you start: which
+roles, how many, in which repositories, who dispatches. That is the right form
+when you already know.
+
+It is the wrong one straight after an analysis, when the session in front of
+you has just spent three days measuring the thing and knows the shape of the
+work better than the form does. So a session can propose a team instead. What
+comes back is a **draft**, which a person reads and edits before anything is
+raised — the deck does not let a session staff itself.
+
+### Knowing who to ask
+
+Every Claude Code session on this machine can already address every other one:
+they publish themselves in `~/.claude/sessions`, and the channel was never
+closed. What is missing is knowing that asking is an option, and who is worth
+asking.
+
+A session launched into a repository has no idea that the answer to "what does
+Payments put on this event" is sitting in another process with that repository
+already loaded. So it does the only thing it can, and reads fifty files to
+rebuild a context that existed twenty metres away. The roster is the list each
+new session is handed, so that it knows.
 
 ## Interrupting and killing
 

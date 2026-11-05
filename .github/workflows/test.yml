@@ -1,0 +1,42 @@
+# The deck is written to run on macOS, Windows and Linux, and until this file
+# existed it had only ever been run on macOS. "Written portably" and "works"
+# are different claims; this is the one that checks the second.
+#
+# The matrix is three operating systems by the two ends of the supported Node
+# range, because package.json says `>=18` and a claim nothing exercises is a
+# claim waiting to be wrong.
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: ${{ matrix.os }} · node ${{ matrix.node }}
+    runs-on: ${{ matrix.os }}
+    # Every cell runs even when one fails: the useful answer is which
+    # platforms are broken, not that some platform is.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        node: ['18', '22']
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      - run: npm ci
+
+      # The UI is built before the tests rather than after: a broken build is
+      # a failure a contributor should see named as a build failure.
+      - run: npm run build
+
+      - run: npm test

@@ -1,11 +1,11 @@
 /**
  * meeting.js — the conversations sessions have with each other.
  *
- * The atlas answers "what is everything doing". This answers a question no
- * view answered at all: "what are they saying to each other". Two sessions
- * working the same repo argue, concede, divide the work and escalate to you —
- * and until now every word of it was invisible unless you opened both
- * transcripts side by side and read by timestamp.
+ * The teams screen answers "what is everything doing". This answers a
+ * question no view answered at all: "what are they saying to each other".
+ * Two sessions working the same repo argue, concede, divide the work and
+ * escalate to you — and until now every word of it was invisible unless you
+ * opened both transcripts side by side and read by timestamp.
  *
  * It dials nothing. The peer channel is a unix socket per session with a
  * shared secret beside it, undocumented and free to change; reading it would
@@ -171,9 +171,9 @@ export function deliveriesFromLine(raw) {
 /**
  * Read whatever has been appended to one transcript since the last call.
  *
- * Same offset discipline as the atlas, for the same reason: these files reach
- * tens of megabytes and a poll that re-read them all would cost more than
- * everything else the deck does put together.
+ * Same offset discipline as the transcript reader, for the same reason: these
+ * files reach tens of megabytes and a poll that re-read them all would cost
+ * more than everything else the deck does put together.
  */
 function scan(file) {
   let state = scans.get(file)

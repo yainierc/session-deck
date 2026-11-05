@@ -73,7 +73,24 @@ function parseStatus(raw) {
   try {
     data = JSON.parse(raw)
   } catch {
-    return { state: 'unknown', message: 'The CLI did not answer in a form this understands' }
+    // The CLI can print a warning — an expired token, an update notice — on
+    // stdout ahead of the object. The object is still the answer, so it is cut
+    // out of the noise rather than discarded along with it.
+    const text = String(raw || '')
+    const start = text.indexOf('{')
+    const end = text.lastIndexOf('}')
+    try {
+      if (start === -1 || end <= start) throw new Error('no object')
+      data = JSON.parse(text.slice(start, end + 1))
+    } catch {
+      // What it actually said, since "did not understand" alone leaves
+      // nobody anything to act on.
+      const said = firstLine(text)
+      return {
+        state: 'unknown',
+        message: said ? `The CLI answered: ${said.slice(0, 160)}` : 'The CLI did not answer in a form this understands',
+      }
+    }
   }
 
   if (typeof data?.loggedIn !== 'boolean') {

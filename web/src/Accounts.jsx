@@ -45,7 +45,27 @@ export default function Accounts({ tabs }) {
   useEffect(() => { load(false) }, [load])
 
   async function startSignIn(payload, label) {
-    setStarted({ label, ...(await signIn(payload)) })
+    setStarted({ label, ...(await signIn(payload)), signingOut: payload.action === 'logout' })
+  }
+
+  /**
+   * Signing out is asked about first, unlike every other button here.
+   *
+   * The rest of this screen repairs things; this one breaks a working setup,
+   * and it breaks the setup the whole panel stands on — the deck drives the
+   * `claude` binary, so a logged-out CLI means every session started afterwards
+   * dies where nobody can see it. That is worth one dialog, and the dialog says
+   * what it costs rather than asking "are you sure".
+   */
+  function startSignOut(claude) {
+    const who = claude.email || 'this account'
+    if (!window.confirm(
+      `Sign out of ${who}?\n\nThe deck runs the claude CLI, so every session you start after this `
+      + 'fails on arrival — and it fails inside a subprocess with no terminal to ask you for a '
+      + 'browser. Sessions already running can die on their next turn.\n\n'
+      + 'A terminal opens to do it.',
+    )) return
+    startSignIn({ target: 'claude', action: 'logout' }, 'Claude')
   }
 
   // Coming back from the terminal is the moment the answer has changed, and
@@ -145,9 +165,25 @@ export default function Accounts({ tabs }) {
                   {claude.state === 'out' && 'not signed in'}
                   {claude.state === 'provider' && claude.provider}
                   {claude.state === 'unknown' && (claude.message || 'unknown')}
-                  {claude.state === 'out' && canSignIn && (
+                  {/* `unknown` gets the button too. It was withheld there on the
+                      theory that a sign-in nobody established was needed could
+                      break a working setup — but an expired token reads as
+                      unknown, and then the panel had no way back at all. A
+                      redundant `claude auth login` costs a browser tab. */}
+                  {(claude.state === 'out' || (claude.state === 'unknown' && claude.tool !== false)) && canSignIn && (
                     <button className="btn btn-slim" onClick={() => startSignIn({ target: 'claude' }, 'Claude')}>
-                      Sign in
+                      {claude.state === 'unknown' ? 'Sign in again' : 'Sign in'}
+                    </button>
+                  )}
+                  {/* Offered only where it would do something. An API key in
+                      the environment beats a subscription login, so signing out
+                      of one changes nothing while the key is set — and `provider`
+                      has no Anthropic login to leave in the first place. Both are
+                      explained in the footnotes below rather than by a button
+                      that quietly does nothing. */}
+                  {claude.state === 'in' && claude.method !== 'apiKey' && canSignIn && (
+                    <button className="btn btn-slim" onClick={() => startSignOut(claude)}>
+                      Sign out
                     </button>
                   )}
                 </span>
@@ -172,7 +208,8 @@ export default function Accounts({ tabs }) {
             {claude.method === 'apiKey' && (
               <p className="acct-foot">
                 Sessions are billed to an API key from the environment, not to a subscription.
-                Signing in would not change that while the key is set.
+                Neither signing in nor signing out changes that while the key is set, which is why
+                there is no button here — the key has to go from the environment first.
               </p>
             )}
           </section>

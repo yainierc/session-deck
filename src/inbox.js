@@ -77,6 +77,11 @@ export async function buildInbox({ sessions, projects, refresh = false }) {
   // ---- everything that needs git or gh, one project at a time ----
   const roots = [...new Set(projects.map((p) => p.path).filter(Boolean))]
 
+  // What each project is called, taken from the list the sidebar draws rather
+  // than re-derived from the path: a project you renamed must be named the
+  // same way in the queue, or the row and the heading it refers to disagree.
+  const names = new Map(projects.filter((p) => p.path).map((p) => [p.path, p.name]))
+
   // Every identity behind the projects in this workspace — a personal GitHub
   // account, a work one, an Azure DevOps sign-in. There is no single "you"
   // any more, so the UI is told the whole set.
@@ -90,7 +95,7 @@ export async function buildInbox({ sessions, projects, refresh = false }) {
 
   await Promise.all(
     roots.map(async (root) => {
-      const name = path.basename(root)
+      const name = names.get(root) || path.basename(root)
 
       const [pullRequests, rootState, worktrees] = await Promise.all([
         listPullRequests(root, { refresh }),
@@ -196,12 +201,19 @@ export async function buildInbox({ sessions, projects, refresh = false }) {
         // it here and refusing it there would just waste a click.
         const busy = sessions.some((session) => isInside(session.cwd, worktree.path))
 
-        if (status.safeToDelete && !busy) {
+        /*
+         * `finished` and not `safeToDelete`: since the two were split, the
+         * second only means "nothing would be lost", which is true of most
+         * worktrees and would turn this queue into a list of everything.
+         * Tidying is for work that landed.
+         */
+        if (status.finished && !busy) {
           items.push({
             id: `cleanup:${worktree.path}`,
             severity: 'cleanup',
             title: `Worktree "${worktree.name}" can go`,
-            detail: status.pr ? `PR #${status.pr.number} merged` : `in ${status.parent}`,
+            // Why it is safe, in the words of whatever proved it.
+            detail: status.evidence?.[0] || `in ${status.parent}`,
             project: name,
             projectPath: root,
             action: { type: 'project', path: root, label: 'Open project' },

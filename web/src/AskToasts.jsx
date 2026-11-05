@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { AskBody } from './Ask.jsx'
 
 /**
  * AskToasts — every ask blocked on you, floating over whatever you are
@@ -74,87 +75,19 @@ function Where({ ask, onOpen, onDismiss }) {
   )
 }
 
-function PermissionToast({ ask, onAnswer, onOpen, onDismiss }) {
-  const [sent, setSent] = useState(null)
-  const [error, setError] = useState(null)
+/**
+ * The toast is the frame; what is inside it is the same ask the session's own
+ * card draws, from the same place. A question and a permission differ in what
+ * they offer, and `AskBody` is where that difference is decided.
+ */
+function Toast({ ask, onAnswer, onOpen, onDismiss }) {
   const pending = ask.pending
-
-  async function answer(decision) {
-    if (sent) return
-    setSent(decision)
-    setError(null)
-    const result = await onAnswer(ask.deckId, pending.requestId, decision)
-    // The toast does not remove itself on success: the session list does,
-    // when the server says the ask is gone. Failing, though, has to give the
-    // buttons back — otherwise the card is a dead end.
-    if (!result?.ok) {
-      setSent(null)
-      setError(result?.error || 'Could not send that')
-    }
-  }
+  const tone = pending.questions ? 'is-question' : (pending.defaultToNo ? 'is-careful' : '')
 
   return (
-    <section className={`toast ${pending.defaultToNo ? 'is-careful' : ''}`} role="alert">
+    <section className={`toast ${tone}`} role="alert">
       <Where ask={ask} onOpen={onOpen} onDismiss={onDismiss} />
-
-      <p className="toast-title">
-        {pending.title}
-        {pending.defaultToNo && <span className="toast-warn">careful</span>}
-      </p>
-      {pending.detail && <pre className="toast-detail">{pending.detail}</pre>}
-      {error && <p className="toast-error">{error}</p>}
-
-      <div className="toast-actions">
-        <button
-          className="btn btn-slim btn-deny"
-          onClick={() => answer('deny')}
-          disabled={Boolean(sent)}
-        >
-          {sent === 'deny' ? 'Denying...' : 'Deny'}
-        </button>
-        {/*
-          Offered only when the SDK says the rule it would write covers no
-          more than the thing being asked about — the same restraint the card
-          in the conversation shows, and for the same reason.
-        */}
-        {pending.canAlwaysAllow && (
-          <button
-            className="btn btn-slim"
-            onClick={() => answer('always')}
-            disabled={Boolean(sent)}
-            title="Allow this, and stop asking for it"
-          >
-            {sent === 'always' ? '...' : 'Always'}
-          </button>
-        )}
-        <button
-          className={`btn btn-slim ${pending.defaultToNo ? '' : 'btn-primary'}`}
-          onClick={() => answer('allow')}
-          disabled={Boolean(sent)}
-        >
-          {sent === 'allow' ? 'Allowing...' : 'Allow once'}
-        </button>
-      </div>
-    </section>
-  )
-}
-
-function QuestionToast({ ask, onOpen, onDismiss }) {
-  const first = ask.pending.questions?.[0]
-  const more = (ask.pending.questions?.length || 0) - 1
-
-  return (
-    <section className="toast is-question" role="alert">
-      <Where ask={ask} onOpen={onOpen} onDismiss={onDismiss} />
-
-      <p className="toast-title">{first?.question || 'It is asking you something'}</p>
-      {more > 0 && (
-        <p className="toast-sub">and {more} more {more === 1 ? 'question' : 'questions'}</p>
-      )}
-
-      <div className="toast-actions">
-        <button className="btn btn-slim btn-primary" onClick={onOpen}>Answer</button>
-      </div>
+      <AskBody pending={pending} deckId={ask.deckId} onAnswer={onAnswer} onOpen={onOpen} />
     </section>
   )
 }
@@ -217,24 +150,15 @@ export default function AskToasts({ sessions, deck, hideFor, silent, onOpenSessi
      * is announced as it lands.
      */
     <div className="toasts" role="region" aria-label="Waiting on you" aria-live="polite">
-      {shown.map((ask) =>
-        ask.pending.questions ? (
-          <QuestionToast
-            key={ask.pending.requestId}
-            ask={ask}
-            onOpen={() => onOpenSession(ask)}
-            onDismiss={() => dismiss(ask.pending.requestId)}
-          />
-        ) : (
-          <PermissionToast
-            key={ask.pending.requestId}
-            ask={ask}
-            onAnswer={deck.answer}
-            onOpen={() => onOpenSession(ask)}
-            onDismiss={() => dismiss(ask.pending.requestId)}
-          />
-        ),
-      )}
+      {shown.map((ask) => (
+        <Toast
+          key={ask.pending.requestId}
+          ask={ask}
+          onAnswer={deck.answer}
+          onOpen={() => onOpenSession(ask)}
+          onDismiss={() => dismiss(ask.pending.requestId)}
+        />
+      ))}
 
       {/* Past three, the corner stops being readable and starts being a wall.
           The rest are counted and the queue is one click away. */}

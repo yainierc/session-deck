@@ -39,7 +39,7 @@ test('an unlabelled launch gets no name, and keeps the one the CLI derives', () 
 })
 
 test('an address survives being typed back: no accents, no spaces, no case', () => {
-  assert.equal(peerName('/Users/x/acme/Selfserve', 'Revisión de API'), 'selfserve-revision-de-api')
+  assert.equal(peerName('/Users/x/acme/Checkout', 'Revisión de API'), 'checkout-revision-de-api')
 })
 
 test('an address already in use is numbered rather than duplicated', () => {
@@ -69,9 +69,9 @@ function snapshot() {
     // Managed: the label on screen, and the address underneath it.
     {
       name: 'Revisar el cierre',
-      peerName: 'selfserve-cierre',
-      project: 'Selfserve',
-      cwd: '/x/Selfserve',
+      peerName: 'checkout-release',
+      project: 'Checkout',
+      cwd: '/x/Checkout',
       status: 'busy',
       permissionMode: 'default',
     },
@@ -79,9 +79,9 @@ function snapshot() {
 }
 
 test('a managed peer resolves by its address, not by the label on screen', () => {
-  const [peer] = resolvePeers(snapshot(), ['selfserve-cierre'])
-  assert.equal(peer.name, 'selfserve-cierre')
-  assert.equal(peer.project, 'Selfserve')
+  const [peer] = resolvePeers(snapshot(), ['checkout-release'])
+  assert.equal(peer.name, 'checkout-release')
+  assert.equal(peer.project, 'Checkout')
 })
 
 test('the label on screen is not an address and does not resolve', () => {
@@ -128,32 +128,32 @@ test('a peer whose mode we do not know counts as one that may not hear us', () =
 })
 
 test('a peer in the other permission class is held', () => {
-  const peers = resolvePeers(snapshot(), ['selfserve-cierre'])
-  assert.deepEqual(heldPeers(peers, 'bypassPermissions').map((p) => p.name), ['selfserve-cierre'])
+  const peers = resolvePeers(snapshot(), ['checkout-release'])
+  assert.deepEqual(heldPeers(peers, 'bypassPermissions').map((p) => p.name), ['checkout-release'])
 })
 
 test('a peer in our own class is not', () => {
-  const peers = resolvePeers(snapshot(), ['selfserve-cierre'])
+  const peers = resolvePeers(snapshot(), ['checkout-release'])
   assert.deepEqual(heldPeers(peers, 'default'), [])
 })
 
 test('the block names every peer and the project each one holds', () => {
-  const block = rosterBlock(resolvePeers(snapshot(), ['payments-fa', 'selfserve-cierre']))
+  const block = rosterBlock(resolvePeers(snapshot(), ['payments-fa', 'checkout-release']))
   assert.match(block, /payments-fa — Payments/)
-  assert.match(block, /selfserve-cierre — Selfserve/)
+  assert.match(block, /checkout-release — Checkout/)
 })
 
 test('the block says nothing about who is busy, because that stops being true', () => {
-  const block = rosterBlock(resolvePeers(snapshot(), ['selfserve-cierre']))
+  const block = rosterBlock(resolvePeers(snapshot(), ['checkout-release']))
   assert.doesNotMatch(block, /busy|idle/)
 })
 
 test('no peers means no paragraph, and the prompt is left exactly as typed', () => {
   assert.equal(rosterBlock([]), '')
-  assert.equal(withRoster('haz la cosa', []), 'haz la cosa')
+  assert.equal(withRoster('do the thing', []), 'do the thing')
 })
 
 test('the briefing is separated from what the user typed', () => {
-  const out = withRoster('haz la cosa', resolvePeers(snapshot(), ['payments-fa']))
-  assert.ok(out.endsWith('---\n\nhaz la cosa'))
+  const out = withRoster('do the thing', resolvePeers(snapshot(), ['payments-fa']))
+  assert.ok(out.endsWith('---\n\ndo the thing'))
 })

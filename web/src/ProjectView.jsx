@@ -1,14 +1,15 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { relativeTime, shortPath, STATUS_LABEL } from './format.js'
-import Roadmap from './Roadmap.jsx'
+import { ProjectPlans } from './Plans.jsx'
+import { ProjectFiles } from './Files.jsx'
 
 /**
  * What you get when you click a folder instead of a session: the shape of
  * the project. Its worktrees (whether or not anything is open in them), its
  * sessions, and whatever subagents are running right now.
  *
- * Its roadmap lives here too, behind a switch rather than below the rest.
- * Overview answers "what is happening in this project", and the roadmap
+ * Its plans live here too, behind a switch rather than below the rest.
+ * Overview answers "what is happening in this project", and the plans tab
  * answers "what is this project trying to get done" — two questions that
  * deserve the whole pane each, the same bargain a session's Chat/Map switch
  * makes.
@@ -18,6 +19,10 @@ export default function ProjectView({ project, onNewTask, onOpenSession, onOpenP
   const [error, setError] = useState(null)
   const [view, setView] = useState('overview')
   const [worktrees, setWorktrees] = useState(null)
+  const [tidying, setTidying] = useState(false)
+  // How many can be collected right now: the number the batch button needs,
+  // and the one figure on this screen that can be acted on in a single go.
+  const landedCount = (worktrees || []).filter((w) => w.status?.finished && w.status?.safeToDelete).length
   const [checking, setChecking] = useState(false)
 
   useEffect(() => {
@@ -173,20 +178,67 @@ export default function ProjectView({ project, onNewTask, onOpenSession, onOpenP
     checkWorktrees(false)
   }, [checkWorktrees])
 
+  /*
+   * Deleting one, in the words of what makes it safe.
+   *
+   * The old text asserted the branch was already in the parent, which on a
+   * repository that squash-merges was false for every worktree it was shown
+   * on. Now the reason comes from the status itself, and a worktree whose
+   * work has not landed says so instead of claiming the opposite.
+   */
   async function deleteWorktree(worktree) {
+    const status = worktree.status || {}
+    const why = status.finished
+      ? `Why this is safe: ${(status.evidence || []).join(' · ')}.`
+      : 'This work has NOT landed yet. The branch and its commits stay — on the server too, ' +
+        'if it was pushed — so you can bring the worktree back. But it is not finished.'
     const ok = window.confirm(
-      `Delete the worktree "${worktree.name}"?\n\n` +
-        `${worktree.path}\n\nIts branch is already in ${worktree.status?.parent || 'the parent branch'}. ` +
-        'This removes the directory from disk. The branch itself is not touched.',
+      `Delete the worktree "${worktree.name}"?\n\n${worktree.path}\n\n${why}\n\n` +
+        'This removes the directory from disk. Commits are not deleted: the branch stays.',
     )
     if (!ok) return
+    // Asked separately, because it is the step that is not recoverable the
+    // same way — and only offered when git itself would allow it.
+    const alsoBranch = status.finished && status.branch
+      ? window.confirm(`Delete the branch "${status.branch}" too?\n\nGit will refuse if it is not merged.`)
+      : false
     const response = await fetch('/api/worktree', {
       method: 'DELETE',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ root: project.path, path: worktree.path }),
+      body: JSON.stringify({ root: project.path, path: worktree.path, deleteBranch: alsoBranch }),
     })
     const result = await response.json()
     if (!result.ok) window.alert(result.error || 'Could not delete the worktree')
+    else if (alsoBranch && !result.branchDeleted) {
+      window.alert(`The worktree is gone. Git kept the branch: ${result.branchError || 'it is not merged'}`)
+    }
+    checkWorktrees(true)
+  }
+
+  /** Everything that landed, in one go. */
+  async function tidyWorktrees() {
+    const done = (worktrees || []).filter((w) => w.status?.finished && w.status?.safeToDelete)
+    if (!done.length) return
+    const ok = window.confirm(
+      `Remove ${done.length} worktree${done.length === 1 ? '' : 's'} whose work has landed?\n\n` +
+        done.map((w) => `· ${w.name} — ${(w.status.evidence || [])[0] || ''}`).join('\n') +
+        '\n\nCommits are not deleted. Anything with uncommitted or unpushed work is left alone.',
+    )
+    if (!ok) return
+    const alsoBranches = window.confirm('Delete their branches too?\n\nGit will refuse any that are not merged.')
+    setTidying(true)
+    const response = await fetch('/api/worktrees/tidy', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ root: project.path, deleteBranches: alsoBranches }),
+    })
+    const result = await response.json().catch(() => ({ ok: false }))
+    setTidying(false)
+    if (!result.ok) window.alert(result.error || 'Could not tidy the worktrees')
+    else if (result.skipped?.length) {
+      window.alert(`Removed ${result.removed.length}. Left alone: ` +
+        result.skipped.map((x) => `${x.name} (${x.why})`).join(', '))
+    }
     checkWorktrees(true)
   }
 
@@ -203,7 +255,8 @@ export default function ProjectView({ project, onNewTask, onOpenSession, onOpenP
           <div className="seg seg-tabs" role="tablist" aria-label="What to look at in this project">
             {[
               { id: 'overview', label: 'Overview', hint: 'What is happening in it right now' },
-              { id: 'roadmap', label: 'Roadmap', hint: 'What it is trying to get done' },
+              { id: 'plans', label: 'Plans', hint: 'What it is trying to get done, read from the repository' },
+              { id: 'files', label: 'Files', hint: 'Its folders and files, read-only' },
             ].map((tab) => (
               <button
                 key={tab.id}
@@ -263,7 +316,14 @@ export default function ProjectView({ project, onNewTask, onOpenSession, onOpenP
         </div>
       </header>
 
-      {view === 'roadmap' && <Roadmap project={project} onOpenSession={onOpenSession} />}
+      {/*
+        The old roadmap lived exactly here and was never filled in: three
+        plans, sixteen milestones, every one of them `done`, abandoned. It
+        kept the plan in the deck's own directory, where nobody could read it
+        without the deck. This reads the plan the repository already has.
+      */}
+      {view === 'plans' && <ProjectPlans root={project.path} />}
+      {view === 'files' && <ProjectFiles root={project.path} />}
 
       <div className="transcript" hidden={view !== 'overview'}>
         {pullResult && (
@@ -296,7 +356,7 @@ export default function ProjectView({ project, onNewTask, onOpenSession, onOpenP
                   <strong>{group.names.join(', ')}</strong> are all working in{' '}
                   {shortPath(group.cwd)}. They edit the same files and cannot see each other, so the
                   last save wins. Give the next one its own worktree and they stop overwriting:
-                  <code>git worktree add ../{project.name}-2 -b una-rama-nueva</code>
+                  <code>git worktree add ../{project.name}-2 -b a-new-branch</code>
                 </p>
               ))}
 
@@ -382,6 +442,11 @@ export default function ProjectView({ project, onNewTask, onOpenSession, onOpenP
                     {checking ? 'checking...' : 'refresh'}
                   </button>
                 )}
+                {landedCount > 0 && (
+                  <button className="linkish" onClick={tidyWorktrees} disabled={tidying}>
+                    {tidying ? 'removing...' : `tidy ${landedCount} landed`}
+                  </button>
+                )}
               </h3>
               {detail.worktrees.length === 0 && <p className="note">This project has no worktrees.</p>}
 
@@ -418,15 +483,22 @@ export default function ProjectView({ project, onNewTask, onOpenSession, onOpenP
                                 PR #{status.pr.number} {status.pr.state.toLowerCase()}
                               </a>
                             )}
-                            {status.landed && <span className="flag is-good">in {status.parent}</span>}
-                            {status.dirty > 0 && <span className="flag is-warn">{status.dirty} uncommitted</span>}
-                            {!status.upstream && status.ahead > 0 && <span className="flag is-warn">never pushed</span>}
-                            {status.upstream && status.unpushed > 0 && (
-                              <span className="flag is-warn">{status.unpushed} unpushed</span>
+                            {status.upstreamGone && <span className="flag is-good">remote branch gone</span>}
+                            {status.merged === true && <span className="flag is-good">in {status.parent}</span>}
+                            {status.atRisk?.map((risk) => (
+                              <span className="flag is-warn" key={risk}>{risk}</span>
+                            ))}
+                            {/*
+                              The verdict, and never on its own. "Safe to delete" with nothing
+                              beside it is not believed by anybody who has lost a branch once,
+                              which is why the reason is rendered next to it.
+                            */}
+                            {status.state === 'protected' && <span className="flag is-warn">keep — work only here</span>}
+                            {status.state === 'integrated' && <span className="flag is-good">landed</span>}
+                            {status.state === 'live' && <span className="flag">not landed · nothing would be lost</span>}
+                            {status.evidence?.length > 0 && (
+                              <span className="flag is-quiet">{status.evidence.join(' · ')}</span>
                             )}
-                            {status.safeToDelete
-                              ? <span className="flag is-good">safe to delete</span>
-                              : <span className="flag">keep</span>}
                           </>
                         )}
                       </div>

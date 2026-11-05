@@ -45,6 +45,17 @@ test('output that is not JSON is unknown, never logged out', () => {
   assert.equal(parseStatus('').state, 'unknown')
 })
 
+test('a warning printed ahead of the JSON does not hide the answer', () => {
+  // An expired token or an update notice can land on stdout before the
+  // object. Treating that as unknown left the panel with no Sign in button.
+  const noisy = 'OAuth token has expired\n' + JSON.stringify({ loggedIn: false, apiProvider: 'firstParty' })
+  assert.equal(parseStatus(noisy).state, 'out')
+})
+
+test('unreadable output says what the CLI said', () => {
+  assert.match(parseStatus('Something went wrong\nmore').message, /Something went wrong/)
+})
+
 test('a cloud provider is not a logged-out account', () => {
   // Bedrock and Vertex authenticate through AWS and GCP. Reporting `out` here
   // would put a Sign in button over a setup that works and cannot be fixed by

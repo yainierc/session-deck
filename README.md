@@ -245,75 +245,25 @@ observed through the registry, not driven — there is no handle to ask it
 through. The bar is absent rather than estimated, because a guess rendered in
 the same place as a reading is indistinguishable from one.
 
-## The file map
+## Watching one session
 
-Every session header carries a **Chat / Map / Timeline / Agents** switch. Chat
-is the conversation. The next two are the same session seen from the other
-side — what it is touching — as a picture and as a story. Agents is the
-conversations it delegated.
+Every session header carries a **Chat / Agents** switch. Chat is the
+conversation, as the session is writing it. Agents is what it delegated — a
+subagent's work reaches the main transcript as a single summary line, and this
+is the only place the rest of it can be read.
 
-The agent sits at the centre. Every file it has opened is a node orbiting its
-folder; a read sends a pulse out to it and lights its ring, an edit fills its
-core, a file written for the first time is born with a flash, and a file that
-has been sitting untouched slowly dims. Size is how many times it has been
-touched, so the file it keeps going back to is the biggest thing on screen.
-Hovering any node gives you the path and the counts.
+There were two more tabs, and a screen behind them. **Map** drew every file
+the session had touched as a live treemap; **Timeline** drew the same events
+as a story, one lane per file; and **All agents** was that map repeated for
+every running session at once, busiest first. All three are gone.
 
-Two rules keep it honest rather than merely pretty:
-
-- **Colour means one thing: which folder.** What happened is carried by shape
-  and motion instead, because one colour cannot mean two things at once.
-- **Nothing is ever colour alone.** Folders are labelled on the map itself,
-  the shapes are in the legend, and a failed call is a red ring *and* a cross
-  *and* the word "failed" in its tooltip.
-
-Only three folders get a hue. That is not a style choice: every node is
-compared against every other one here, and on this surface exactly three of
-the palette's colours clear the colour-blind and normal-vision separation
-floors as an all-pairs set. A fourth would fail both, so the remaining folders
-share one neutral and lean on their labels. The comment above the palette in
-`web/src/FileMap.jsx` has the command that proves it.
-
-The map draws the last 400 file events. Commands are budgeted separately from
-file touches — a session running a test suite in a loop would otherwise push
-its own file history out of the window — and only the latest one is shown, as
-a caption under the map.
-
-### Timeline
-
-The same events, read as a story instead of a picture: one lane per file, time
-running left to right, lanes in the order the files were first touched. The
-file it rewrote nine times is a dense row. The marks mean exactly what they
-mean on the map, because one grammar across both views is worth more than two
-clever ones.
-
-The time axis is linear and the **gaps are real**. A stretch where nothing was
-touched is shaded and labelled with how long it lasted, including the stretch
-between the last file and now — because "this agent has done nothing for
-eleven minutes" is usually the most useful thing on the chart, and a
-compressed axis would hide it.
-
-### All agents
-
-When more than one session is running, the sidebar grows an **All agents**
-entry: every live session as a card, each with its own live map and its
-counters, busiest first — where "busiest" means recently, not in total.
-Clicking a card opens that session. With one session running it is hidden,
-because a deck-wide view of one agent is the session view with extra steps.
-
-Each card is its own chart rather than a slice of a shared one: the three hues
-rank the folders *within* a session, so the same colour on two cards means
-"this session's busiest folder", not one particular directory. That is why
-every folder is labelled on the map itself — across cards the label is the
-identity and the colour is only emphasis.
-
-This is the one part that is polled rather than streamed. The transcript
-socket follows the session you are looking at; the atlas needs all of them, so
-it asks `/api/activity` every two seconds while it is open. Reads are
-incremental — a byte offset per session, the same trick the single-session
-tail uses — so polling a quiet session costs one `stat()` call, and nothing is
-read at all when the screen is closed.
-
+They were not broken. They were an answer to "what is everything doing"
+worked out from file activity, and the teams screen answers the same question
+from the arrangement you declared when you raised the team — who hands out
+the work, who talks to whom, who is waiting on you. When the two disagreed,
+the arrangement was the right one. Deleting them took about 1,500 lines of
+drawing code, a polling endpoint and a two-second timer with it. The history
+is in git if the picture is ever wanted back.
 ## What needs you
 
 The home screen is a queue, not a list of projects. Everything else in the
@@ -413,7 +363,7 @@ it. A session running anywhere else does not appear at all, and does not
 notify you either: a repo you never added to the deck is one you have decided
 not to be interrupted by, and an alert you cannot act on is worse than no
 alert. That filter runs once, where the state is built, so the sidebar, the
-inbox, the atlas and the desktop notifier can never disagree about which
+inbox, the teams screen and the desktop notifier can never disagree about which
 sessions exist.
 
 The one thing that overrides it: a task **the deck itself launched** always
@@ -461,18 +411,26 @@ places, a door opens.
 
 ## Permissions
 
-Every launched session runs at one of three levels, picked in the launcher.
+Every launched session runs at one of four levels, picked in the launcher.
 The choice is saved, so you set it once rather than on every launch.
 
 | Mode | What it does |
 |---|---|
 | **Ask me** | Asks before anything your rules do not already allow. |
 | **Auto-accept edits** | Writes and edits files without asking. Still asks before running commands. |
+| **Auto** | A safety check approves routine actions on its own and only asks about risky ones. |
 | **Never ask** | Runs everything without asking, including shell commands. |
 
 **Auto-accept edits** is usually the one worth having: file writes are what
 prompt most often, while shell commands — the ones actually worth a glance —
 still stop for you.
+
+**Auto** hands the decision to Claude Code's own classifier: a second model
+reads each call, approves the routine ones and only sends you the ones it
+judges risky. It is the one to pick where an organisation policy disables
+`bypassPermissions` — there **Never ask** silently runs as **Ask me** (see
+below), while **Auto** is still allowed and still runs without a card per
+command.
 
 These are the deck's own answer to each tool call, given before the session
 ever reaches your rules, and for a long time they were not: the deck parked
@@ -499,7 +457,8 @@ permissions are off while they are still being enforced — the most dangerous
 thing a permissions UI can do.
 
 So the deck reads the mode the session reports at startup, shows that, and
-says plainly when it is not what was asked for.
+says plainly when it is not what was asked for. When the refused request was
+**Never ask**, the note also points at **Auto**.
 
 ### The ask comes to you
 
@@ -1037,8 +996,7 @@ src/platform.js     everything OS-specific (the only file to check when porting)
 src/auth.js         the pairing key, and who is allowed to ask anything at all
 src/sessions.js     live registry: read, drop dead PIDs, group, watch
 src/transcripts.js  index the .jsonl files, read them, follow them by offset
-src/activity.js     tool calls -> file events, for the file map
-src/atlas.js        the same, for every live session, read incrementally
+src/activity.js     tool calls -> file events, for the working indicator
 src/projects.js     repository root, worktree list, branches
 src/workspace.js    the folders you added, persisted to ~/.session-deck
 src/browse.js       directory listing for the folder picker, local requests only

@@ -17,6 +17,7 @@ function stubSdk() {
   const seen = {}
   const start = ({ options }) => {
     seen.canUseTool = options.canUseTool
+    seen.options = options
     return {
       // Stays open, like a real session between turns. No timer, so it does
       // not hold the test runner's event loop alive.
@@ -92,7 +93,7 @@ test('a message sent to a blocked session does not clear the waiting state', asy
   const { deckId } = agents.launch({ cwd: '/tmp', prompt: 'go' })
   const parked = park(seen, 'r1', 'ls')
 
-  // "aun esta corriendo ?" — typed while the session sits on a permission.
+  // Typed by the user while the session sits on a permission prompt.
   const result = agents.say(deckId, 'still running?')
   assert.equal(result.ok, true)
   assert.equal(result.queued, true, 'the sender has to be told it is queued')
@@ -314,6 +315,28 @@ test('the mode is read when the call arrives, not when the session started', asy
   assert.equal(agents.list()[0].pendingCount, 0)
 })
 
+test('a refused "Never ask" says so, and names the mode that is left', async () => {
+  // An organisation policy that disables bypassPermissions: the init message
+  // reports 'default' however the session was asked to start.
+  const start = () => ({
+    async *[Symbol.asyncIterator]() {
+      yield { type: 'system', subtype: 'init', session_id: 's1', permissionMode: 'default' }
+      await new Promise(() => {})
+    },
+    interrupt: async () => {},
+    return: async () => {},
+    setPermissionMode: async () => {},
+  })
+  const agents = createAgentManager({ start })
+  agents.launch({ cwd: '/tmp', prompt: 'go', permissionMode: 'bypassPermissions' })
+  await new Promise((r) => setImmediate(r))
+
+  const view = agents.list()[0]
+  assert.equal(view.permissionMode, 'default')
+  assert.match(view.modeNote, /only allowed "default"/)
+  assert.match(view.modeNote, /"Auto"/)
+})
+
 test('what each mode answers, in one place', () => {
   assert.equal(autoAllowed('bypassPermissions', 'Bash', false), true)
   assert.equal(autoAllowed('acceptEdits', 'Write', false), true)
@@ -321,6 +344,10 @@ test('what each mode answers, in one place', () => {
   assert.equal(autoAllowed('default', 'Write', false), false)
   assert.equal(autoAllowed('bypassPermissions', 'AskUserQuestion', true), false)
   assert.equal(autoAllowed('acceptEdits', 'AskUserQuestion', true), false)
+  // Auto's classifier has already approved what it could before the call gets
+  // here, so whatever reaches the deck is what it wanted a person to see.
+  assert.equal(autoAllowed('auto', 'Bash', false), false)
+  assert.equal(autoAllowed('auto', 'Write', false), false)
   // An unknown mode must never be read as permission.
   assert.equal(autoAllowed(undefined, 'Bash', false), false)
   assert.equal(autoAllowed('plan', 'Write', false), false)
@@ -534,11 +561,11 @@ test('an introduced session is titled after the task, not after the briefing', (
   const agents = createAgentManager({ start })
   agents.launch({
     cwd: '/tmp/payments',
-    prompt: 'revisa el contrato del evento',
-    peers: [{ name: 'selfserve-ui', project: 'Selfserve' }],
+    prompt: 'review the event contract',
+    peers: [{ name: 'checkout-ui', project: 'Checkout' }],
   })
 
-  assert.equal(agents.list()[0].title, 'revisa el contrato del evento')
+  assert.equal(agents.list()[0].title, 'review the event contract')
 })
 
 test('the address is composed from the label, and numbered around one in use', () => {
@@ -559,4 +586,584 @@ test('a launch with no label keeps the name the CLI derives, and sends no flag',
   const agents = createAgentManager({ start })
   agents.launch({ cwd: '/tmp/payments', prompt: 'go' })
   assert.equal(agents.list()[0].peerName, null)
+})
+
+/* ---------------------------------------------------------------------------
+ * How a session is started: the model, the effort and the advisor.
+ *
+ * These three have to be on the very first request. The plan a session commits
+ * to is decided in its first turn, and the methods that change effort or the
+ * advisor mid-session need a running process — by the time there is one, the
+ * first prompt has already gone into the stream.
+ * ------------------------------------------------------------------------ */
+
+/** A query() that records the options it was handed, once per spawn. */
+function recordingSdk() {
+  const spawns = []
+  const start = ({ options }) => {
+    spawns.push(options)
+    return {
+      async *[Symbol.asyncIterator]() { await new Promise(() => {}) },
+      interrupt: async () => {},
+      return: async () => {},
+      setPermissionMode: async () => {},
+    }
+  }
+  return { start, spawns }
+}
+
+test('effort and the advisor are set at spawn, not after the first turn', () => {
+  const { start, spawns } = recordingSdk()
+  const agents = createAgentManager({ start })
+
+  agents.launch({
+    cwd: '/tmp', prompt: 'migrate the schema', model: 'sonnet', effort: 'high', advisor: true,
+  })
+
+  assert.equal(spawns.length, 1)
+  assert.equal(spawns[0].model, 'sonnet')
+  assert.deepEqual(spawns[0].settings, { effortLevel: 'high', advisorModel: 'opus' })
+})
+
+test('asking for nothing sends nothing', () => {
+  const { start, spawns } = recordingSdk()
+  const agents = createAgentManager({ start })
+
+  agents.launch({ cwd: '/tmp', prompt: 'go' })
+
+  // Not an empty object: an empty settings layer is still a settings layer,
+  // and the point is that a session nobody chose for runs on the CLI's own
+  // defaults.
+  assert.equal('settings' in spawns[0], false)
+  assert.equal('model' in spawns[0], false)
+})
+
+test('nothing flag-shaped or unrecognised reaches the CLI', () => {
+  const { start, spawns } = recordingSdk()
+  const agents = createAgentManager({ start })
+
+  /*
+   * launch() is the funnel every path goes through — the panel's, a roadmap's,
+   * a report's — so the guard lives there and not at one of the entrances.
+   * Which models exist is the CLI's answer and not ours, so a model is only
+   * shape-checked; an effort and an advisor are ours, and are allowlisted.
+   */
+  agents.launch({
+    cwd: '/tmp', prompt: 'go',
+    model: '--dangerously-skip-permissions', effort: 'extreme', advisor: 'sure',
+  })
+
+  assert.equal('model' in spawns[0], false)
+  assert.equal('settings' in spawns[0], false)
+  assert.equal(agents.list()[0].requestedAdvisor, null)
+})
+
+test('a full model id from the CLI list is passed through as it came', () => {
+  const { start, spawns } = recordingSdk()
+  const agents = createAgentManager({ start })
+
+  // The list the launcher offers holds ids like this, brackets and all. A
+  // guard that only knew the three short aliases would drop the model the
+  // account actually has.
+  agents.launch({ cwd: '/tmp', prompt: 'go', model: 'claude-fable-5-1[1m]', advisor: true })
+
+  assert.equal(spawns[0].model, 'claude-fable-5-1[1m]')
+  // And Fable is advised by Fable: an Opus advisor would be refused, silently.
+  assert.deepEqual(spawns[0].settings, { advisorModel: 'fable' })
+})
+
+test('a session woken later comes back thinking as hard as it went to sleep', async () => {
+  const { start, spawns } = recordingSdk()
+  const agents = createAgentManager({ start })
+
+  const { ok, deckId } = agents.adopt({
+    sessionId: 'yesterday-1', cwd: '/tmp', name: 'backend', model: 'sonnet',
+    effort: 'xhigh', advisor: 'opus',
+  })
+  assert.ok(ok)
+  // Adopting starts no process: there is nothing to record yet.
+  assert.equal(spawns.length, 0)
+
+  await agents.wake(deckId)
+
+  assert.equal(spawns.length, 1)
+  assert.equal(spawns[0].model, 'sonnet')
+  assert.deepEqual(spawns[0].settings, { effortLevel: 'xhigh', advisorModel: 'opus' })
+})
+
+test('a team woken as a set reports who came up and who could not', async () => {
+  const { start, spawns } = recordingSdk()
+  const agents = createAgentManager({ start })
+
+  // Three that slept through a restart, and one of them already running: the
+  // ordinary state of a team you come back to, since nothing says every card
+  // was asleep when you pressed the button.
+  const a = agents.adopt({ sessionId: 'y-1', cwd: '/tmp', name: 'core' }).deckId
+  const b = agents.adopt({ sessionId: 'y-2', cwd: '/tmp', name: 'slice' }).deckId
+  const c = agents.adopt({ sessionId: 'y-3', cwd: '/tmp', name: 'verifier' }).deckId
+  await agents.wake(c)
+  assert.equal(spawns.length, 1)
+
+  const result = agents.wakeMany([a, b, c, 'not-a-session'])
+
+  // Two processes started, not four: the one already running was left alone
+  // and the unknown id started nothing.
+  assert.equal(spawns.length, 3)
+  assert.equal(result.woken, 2)
+  assert.equal(result.already, 1)
+  assert.equal(result.failed.length, 1)
+  assert.equal(result.failed[0].deckId, 'not-a-session')
+  // One bad id among three that started is not a failed wake. The caller
+  // names the one that did not come up and leaves the others alone.
+  assert.equal(result.ok, true)
+})
+
+test('a wake where nothing at all came up is reported as a failure', () => {
+  const agents = createAgentManager({ start: recordingSdk().start })
+
+  // Nothing to half-succeed with, so there is nothing to soften: this is the
+  // press that did nothing, and it has to say so.
+  const result = agents.wakeMany(['gone-1', 'gone-2'])
+  assert.equal(result.ok, false)
+  assert.equal(result.woken, 0)
+  assert.equal(result.failed.length, 2)
+})
+
+/* ---------------------------------------------------------------------------
+ * A team, started as one act.
+ *
+ * The roster paragraph rides in a session's first prompt and only there, so
+ * the order sessions are started in decides who knows whom — and getting that
+ * wrong is invisible from both ends until somebody needs an answer and has
+ * nobody to ask for it.
+ * ------------------------------------------------------------------------ */
+
+/** The roster paragraph names its peers one per line, as `name — project`. */
+function rosterOf(prompt) {
+  return [...String(prompt).matchAll(/^ {2}(\S+) — /gm)].map((m) => m[1])
+}
+
+/** A query() that records the first prompt each session was given. */
+function promptRecordingSdk() {
+  const prompts = []
+  const start = ({ prompt }) => {
+    // The input stream pushes the first content before the SDK is handed it.
+    prompt[Symbol.asyncIterator]().next().then((r) => {
+      if (!r.done) prompts.push(r.value.message.content)
+    })
+    return {
+      async *[Symbol.asyncIterator]() { await new Promise(() => {}) },
+      interrupt: async () => {},
+      return: async () => {},
+      setPermissionMode: async () => {},
+    }
+  }
+  return { start, prompts }
+}
+
+test('the one that delegates is started last, so it knows everybody', async () => {
+  const { start, prompts } = promptRecordingSdk()
+  const agents = createAgentManager({ start })
+
+  const results = agents.launchTeam({
+    members: [
+      { cwd: '/tmp/platform', prompt: 'coordinate', name: 'supervisor', delegates: true },
+      { cwd: '/tmp/platform', prompt: 'build the api', name: 'backend' },
+      { cwd: '/tmp/payment', prompt: 'build the web', name: 'frontend' },
+    ],
+  })
+
+  await new Promise((r) => setTimeout(r, 0))
+
+  assert.equal(results.length, 3)
+  assert.ok(results.every((r) => r.ok))
+
+  // Started last, so its own result is last, and it was told about both.
+  const supervisor = results.at(-1)
+  assert.equal(supervisor.label, 'supervisor')
+  assert.deepEqual(supervisor.introduced, ['platform-backend', 'payment-frontend'])
+
+  // The first worker was told about nobody — there was nobody yet. That is the
+  // trade: a worker can always reply, because a message carries its sender.
+  assert.deepEqual(results[0].introduced, [])
+
+  // And the paragraph really went into the prompt, not just into the result.
+  assert.deepEqual(rosterOf(prompts.at(-1)), ['platform-backend', 'payment-frontend'])
+})
+
+test('two of the same role in one project do not end up sharing an address', () => {
+  const { start } = recordingSdk()
+  const agents = createAgentManager({ start })
+
+  const results = agents.launchTeam({
+    members: [
+      { cwd: '/tmp/platform', prompt: 'half the work', name: 'backend' },
+      { cwd: '/tmp/platform', prompt: 'the other half', name: 'backend' },
+    ],
+  })
+
+  assert.deepEqual(results.map((r) => r.name), ['platform-backend', 'platform-backend-2'])
+})
+
+test('an address already answering elsewhere is not handed out twice', () => {
+  const { start } = recordingSdk()
+  const agents = createAgentManager({ start })
+
+  const results = agents.launchTeam({
+    members: [{ cwd: '/tmp/platform', prompt: 'go', name: 'backend' }],
+    taken: ['platform-backend'],
+  })
+
+  assert.equal(results[0].name, 'platform-backend-2')
+})
+
+test('past the limit, who was left out is counted instead of dropped quietly', () => {
+  const { start } = recordingSdk()
+  const agents = createAgentManager({ start })
+
+  // Ten colleagues already running, and a limit of eight.
+  const peers = Array.from({ length: 10 }, (_, i) => ({
+    name: `other-${i}`, project: 'elsewhere', cwd: '/tmp/x', status: 'idle', permissionMode: 'default',
+  }))
+
+  const [result] = agents.launchTeam({
+    members: [{ cwd: '/tmp/platform', prompt: 'go', name: 'backend' }],
+    peers,
+  })
+
+  assert.equal(result.introduced.length, 8)
+  assert.equal(result.notIntroduced, 2, 'said, rather than left to be noticed later')
+})
+
+test('a member that cannot start does not take the ones already running with it', () => {
+  const { start } = recordingSdk()
+  const agents = createAgentManager({ start })
+
+  const results = agents.launchTeam({
+    members: [
+      { cwd: '/tmp/platform', prompt: 'go', name: 'backend' },
+      // No prompt: launch() refuses it.
+      { cwd: '/tmp/payment', prompt: '   ', name: 'frontend' },
+      { cwd: '/tmp/checkout', prompt: 'go', name: 'analyst' },
+    ],
+  })
+
+  assert.deepEqual(results.map((r) => r.ok), [true, false, true])
+  assert.match(results[1].error, /prompt is required/)
+  // The two that came up are running. There is no un-launching a session, and
+  // stopping real work to make a failure look tidy would be the worse answer.
+  assert.equal(agents.list().filter((s) => s.status === 'working').length, 2)
+})
+
+test('two members of the same role are told apart by position, not by name', () => {
+  const { start } = recordingSdk()
+  const agents = createAgentManager({ start })
+
+  /*
+   * The order changes under the caller's feet — the one that hands out the
+   * work is started last — so a result has to say which member it came from.
+   * Matching on the name instead gave both Analysts the first one's
+   * properties, and the screen put the whole team on the supervisor's row.
+   */
+  const results = agents.launchTeam({
+    members: [
+      { cwd: '/tmp/platform', prompt: 'go', name: 'Analyst', delegates: true },
+      { cwd: '/tmp/payment', prompt: 'go', name: 'Analyst' },
+    ],
+  })
+
+  const delegating = results.find((r) => r.at === 0)
+  const worker = results.find((r) => r.at === 1)
+  assert.equal(delegating.name, 'platform-analyst')
+  assert.equal(worker.name, 'payment-analyst')
+
+  // And the one that delegates really did go last.
+  assert.equal(results.at(-1).at, 0)
+  assert.deepEqual(results.at(-1).introduced, ['payment-analyst'])
+})
+
+/* ---------------------------------------------------------------------------
+ * A PDF is the one attachment that cannot travel as text.
+ *
+ * Everything else attachable arrives inline inside a tag, because it is text
+ * and a tag is enough to mark where it ends. A PDF read that way is mojibake,
+ * and mojibake in a prompt costs context and teaches Claude nothing — so it
+ * goes as a document content block, which is the shape the Messages API
+ * documents for exactly this.
+ * ------------------------------------------------------------------------ */
+
+const pdf = (kb, extra = {}) => ({
+  name: 'spec.pdf',
+  media_type: 'application/pdf',
+  // base64 carries 4 characters per 3 bytes, so this decodes to about kb KB.
+  data: 'A'.repeat(Math.round((kb * 1024 * 4) / 3)),
+  ...extra,
+})
+
+test('a PDF becomes a document block, ahead of the words it is about', () => {
+  const content = buildContent('what does this say?', [], [], [pdf(10)])
+
+  assert.ok(Array.isArray(content))
+  assert.equal(content[0].type, 'document')
+  assert.equal(content[0].source.type, 'base64')
+  assert.equal(content[0].source.media_type, 'application/pdf')
+  // Claude reads an instruction better when what it refers to is already in
+  // front of it, which is the same reason the images go first.
+  assert.equal(content.at(-1).type, 'text')
+  assert.equal(content.at(-1).text, 'what does this say?')
+})
+
+test('a PDF too big for the ceiling is dropped rather than sent', () => {
+  // The API takes 32 MB per request and finding that out there costs a turn
+  // that fails after the upload.
+  const content = buildContent('read it', [], [], [pdf(11 * 1024)])
+  assert.equal(content, 'read it', 'nothing attached, so the plain string path')
+})
+
+test('the PDFs stop at the budget, and the ones that fit still go', () => {
+  const content = buildContent('read these', [], [], [
+    pdf(9 * 1024, { name: 'a.pdf' }),
+    pdf(9 * 1024, { name: 'b.pdf' }),
+    pdf(9 * 1024, { name: 'c.pdf' }),
+  ])
+  const documents = content.filter((b) => b.type === 'document')
+  assert.equal(documents.length, 2, 'two fit under 20 MB; the third does not')
+})
+
+test('anything that is not a PDF never reaches the document path', () => {
+  // The base64 document block takes other media types, and every one of them
+  // that is text is better served by the inline path.
+  const content = buildContent('go', [], [], [
+    { name: 'a.docx', media_type: 'application/vnd.openxmlformats', data: 'AAAA' },
+    { name: 'empty.pdf', media_type: 'application/pdf', data: '' },
+  ])
+  assert.equal(content, 'go')
+})
+
+test('a PDF and a markdown file travel by their own routes in one message', () => {
+  const content = buildContent('compare these', [], [{ name: 'notes.md', text: 'hello' }], [pdf(10)])
+
+  assert.equal(content[0].type, 'document')
+  const inline = content.find((b) => b.type === 'text' && b.text.startsWith('<attached-file'))
+  assert.match(inline.text, /name="notes\.md"/)
+  assert.match(inline.text, /hello/)
+})
+
+
+/**
+ * The progress list.
+ *
+ * A session the deck launches has no TodoWrite — that tool belongs to the
+ * CLI, not the SDK — so the panel was given one of its own, handed over at
+ * spawn. These tests cover the three places that wiring can silently come
+ * undone: the options the session is started with, the write the tool's
+ * handler performs, and the trip through the handoff file that a restart
+ * makes.
+ */
+import { cleanTodos, PROGRESS_TOOL } from '../src/progress.js'
+
+test('a launched session has the Artifact tools, which the SDK turns off by default', () => {
+  const { start, seen } = stubSdk()
+  const agents = createAgentManager({ start })
+  const before = process.env.CLAUDE_CODE_ARTIFACT
+  delete process.env.CLAUDE_CODE_ARTIFACT
+  try {
+    agents.launch({ cwd: '/tmp', prompt: 'update the artifact' })
+    assert.equal(seen.options.env.CLAUDE_CODE_ARTIFACT, '1')
+    // `env` replaces the child's environment: without PATH it finds no git.
+    assert.equal(seen.options.env.PATH, process.env.PATH)
+
+    // Turned off in the shell that started the deck stays off.
+    process.env.CLAUDE_CODE_ARTIFACT = '0'
+    agents.launch({ cwd: '/tmp', prompt: 'again' })
+    assert.equal(seen.options.env.CLAUDE_CODE_ARTIFACT, '0')
+  } finally {
+    if (before === undefined) delete process.env.CLAUDE_CODE_ARTIFACT
+    else process.env.CLAUDE_CODE_ARTIFACT = before
+  }
+})
+
+test('a launched session is given the progress tool, already allowed', () => {
+  const { start, seen } = stubSdk()
+  const agents = createAgentManager({ start })
+  agents.launch({ cwd: '/tmp', prompt: 'something of several steps' })
+
+  // The server has to be under this exact key: the tool's address is
+  // mcp__<server>__<tool>, so a different key here renames the tool and
+  // every other reference to it goes stale.
+  assert.ok(seen.options.mcpServers.panel, 'the panel server is passed')
+
+  // Auto-allowed, or the session would raise a permission card every time it
+  // ticked a box — which is the opposite of a list that updates itself.
+  assert.ok(seen.options.allowedTools.includes(PROGRESS_TOOL))
+
+  // The preset is what an omitted systemPrompt already resolves to; naming it
+  // is what buys the append. If this ever became a bare string, every session
+  // would lose Claude Code's own prompt.
+  assert.equal(seen.options.systemPrompt.type, 'preset')
+  assert.equal(seen.options.systemPrompt.preset, 'claude_code')
+  assert.match(seen.options.systemPrompt.append, /progress/i)
+})
+
+test('a new list replaces the one before it', () => {
+  const { start } = stubSdk()
+  const agents = createAgentManager({ start })
+  const { deckId } = agents.launch({ cwd: '/tmp', prompt: 'work' })
+
+  agents.setTodos(deckId, [
+    { text: 'First', status: 'completed' },
+    { text: 'Second', status: 'in_progress' },
+  ])
+  assert.equal(agents.list()[0].todos.length, 2)
+
+  // Shorter, not merged. A session that drops a step from its plan must be
+  // able to drop it from the panel.
+  agents.setTodos(deckId, [{ text: 'First', status: 'completed' }])
+  assert.deepEqual(agents.list()[0].todos, [{ text: 'First', status: 'completed' }])
+})
+
+test('clearing the list is what the × does, and the session can refill it', () => {
+  const { start } = stubSdk()
+  const agents = createAgentManager({ start })
+  const { deckId } = agents.launch({ cwd: '/tmp', prompt: 'work' })
+
+  agents.setTodos(deckId, [{ text: 'Something', status: 'pending' }])
+  assert.deepEqual(agents.setTodos(deckId, []), { ok: true, todos: [] })
+  assert.deepEqual(agents.list()[0].todos, [])
+
+  agents.setTodos(deckId, [{ text: 'Again', status: 'in_progress' }])
+  assert.equal(agents.list()[0].todos.length, 1)
+})
+
+test('a session with no list publishes an empty one, never undefined', () => {
+  const { start } = stubSdk()
+  const agents = createAgentManager({ start })
+  agents.launch({ cwd: '/tmp', prompt: 'work' })
+  // The strip branches on length; undefined here would be a crash on render
+  // for every session that never sent a plan, which is most of them.
+  assert.deepEqual(agents.list()[0].todos, [])
+})
+
+test('an adopted session comes back with the list it had', () => {
+  const { start } = stubSdk()
+  const agents = createAgentManager({ start })
+
+  // Exactly what server.js hands over out of handoff.json at boot, including
+  // the junk a half-written file can hold.
+  agents.adopt({
+    sessionId: 'abc-123',
+    cwd: '/tmp',
+    name: 'resumed',
+    todos: [
+      { text: 'Done before the restart', status: 'completed' },
+      { text: 'Was mid-way', status: 'in_progress' },
+      { text: '', status: 'pending' },
+      'not a step',
+    ],
+  })
+
+  const [view] = agents.list()
+  assert.equal(view.status, 'detached')
+  assert.deepEqual(view.todos, [
+    { text: 'Done before the restart', status: 'completed' },
+    { text: 'Was mid-way', status: 'in_progress' },
+  ])
+})
+
+test('setTodos on a session that is gone says so instead of throwing', () => {
+  const { start } = stubSdk()
+  const agents = createAgentManager({ start })
+  assert.deepEqual(agents.setTodos('nope', []), { ok: false, error: 'unknown session' })
+})
+
+test('what the panel stores is what the handoff file can hold', () => {
+  // cleanTodos is the single gate both edges go through: the tool's output on
+  // the way in, and the file's contents on the way back. Same rules, so a
+  // list cannot change shape by surviving a restart.
+  const once = cleanTodos([{ text: ' Trim  me ', status: 'bogus' }])
+  assert.deepEqual(once, [{ text: 'Trim me', status: 'pending' }])
+  assert.deepEqual(cleanTodos(once), once)
+})
+
+/**
+ * Effort and ultracode.
+ *
+ * `applyFlagSettings` resets session state as well as merging settings: an
+ * `effortLevel` arriving on its own switches ultracode off. The deck's header
+ * has an effort control and no ultracode control, so without care a slider
+ * would take a mode away that nothing in the panel could give back.
+ */
+function stubEffortSdk() {
+  const seen = { applied: [] }
+  const start = ({ options }) => {
+    seen.options = options
+    return {
+      async *[Symbol.asyncIterator]() { await new Promise(() => {}) },
+      interrupt: async () => {},
+      return: async () => {},
+      setPermissionMode: async () => {},
+      applyFlagSettings: async (settings) => { seen.applied.push(settings) },
+    }
+  }
+  return { start, seen }
+}
+
+test('changing the effort keeps ultracode on', async () => {
+  const { start, seen } = stubEffortSdk()
+  const agents = createAgentManager({
+    start,
+    readSettings: async () => ({ effective: { ultracode: true } }),
+  })
+  const { deckId } = agents.launch({ cwd: '/tmp', prompt: 'go' })
+
+  assert.deepEqual(await agents.setEffort(deckId, 'high'), { ok: true, effort: 'high' })
+  assert.deepEqual(seen.applied, [{ effortLevel: 'high', ultracode: true }])
+})
+
+test('the deck does not hold ultracode off for a session that never had it', async () => {
+  // `ultracode: false` would be written into the flag layer, which outranks
+  // the settings file. Leaving the key off keeps the deck out of that
+  // decision entirely.
+  const { start, seen } = stubEffortSdk()
+  const agents = createAgentManager({
+    start,
+    readSettings: async () => ({ effective: {} }),
+  })
+  const { deckId } = agents.launch({ cwd: '/tmp', prompt: 'go' })
+
+  await agents.setEffort(deckId, 'low')
+  assert.deepEqual(seen.applied, [{ effortLevel: 'low' }])
+})
+
+test('the settings cascade is read once per session, not once per change', async () => {
+  const { start, seen } = stubEffortSdk()
+  let reads = 0
+  const agents = createAgentManager({
+    start,
+    readSettings: async () => { reads += 1; return { effective: { ultracode: true } } },
+  })
+  const { deckId } = agents.launch({ cwd: '/tmp', prompt: 'go' })
+
+  await agents.setEffort(deckId, 'high')
+  await agents.setEffort(deckId, 'medium')
+  await agents.setEffort(deckId, null)
+
+  assert.equal(reads, 1)
+  assert.deepEqual(seen.applied, [
+    { effortLevel: 'high', ultracode: true },
+    { effortLevel: 'medium', ultracode: true },
+    { effortLevel: null, ultracode: true },
+  ])
+})
+
+test('settings that cannot be read do not block the effort change', async () => {
+  const { start, seen } = stubEffortSdk()
+  const agents = createAgentManager({
+    start,
+    readSettings: async () => { throw new Error('no such file') },
+  })
+  const { deckId } = agents.launch({ cwd: '/tmp', prompt: 'go' })
+
+  assert.deepEqual(await agents.setEffort(deckId, 'xhigh'), { ok: true, effort: 'xhigh' })
+  assert.deepEqual(seen.applied, [{ effortLevel: 'xhigh' }])
 })

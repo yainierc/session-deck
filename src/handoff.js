@@ -21,6 +21,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { deckDir } from './platform.js'
+import { cleanTodos } from './progress.js'
 
 /**
  * How long a record is worth keeping.
@@ -59,6 +60,23 @@ function clean(raw) {
     title: typeof raw.title === 'string' ? raw.title : '',
     permissionMode: typeof raw.permissionMode === 'string' ? raw.permissionMode : 'default',
     model: typeof raw.model === 'string' ? raw.model : null,
+    /*
+     * What it was asked to think with, so waking it after a restart of the
+     * deck starts the same session and not a cheaper one wearing its name.
+     * Both are re-validated where they are used; here they only have to
+     * survive a round trip through JSON without becoming something else.
+     */
+    effort: typeof raw.effort === 'string' ? raw.effort : null,
+    advisor: typeof raw.advisor === 'string' ? raw.advisor : null,
+    delegates: raw.delegates === true,
+    /*
+     * The progress list, bounded by the same rules the tool enforces.
+     *
+     * Re-cleaned rather than trusted: this is the one field in the record
+     * that is an array of objects, so it is the one a truncated write or an
+     * older deck can leave in a shape the panel would try to render.
+     */
+    todos: cleanTodos(raw.todos),
     startedAt: Number.isFinite(raw.startedAt) ? raw.startedAt : null,
     seenAt: Number.isFinite(raw.seenAt) ? raw.seenAt : null,
   }
@@ -145,6 +163,19 @@ export function remember(sessions) {
       title: s.title || '',
       permissionMode: s.permissionMode || 'default',
       model: s.model || null,
+      // The asked-for values, which are the only ones there are: a session
+      // reports neither of these back, so there is no granted version to
+      // prefer over them.
+      effort: s.requestedEffort || null,
+      advisor: s.requestedAdvisor || null,
+      delegates: Boolean(s.delegates),
+      /*
+       * Written on every state change, like the rest of the record. It is the
+       * only field here that is not a scalar, and it is capped at 30 items of
+       * 140 characters before it ever arrives — so sixty remembered sessions
+       * cannot turn this file into something the deck reads slowly at boot.
+       */
+      todos: cleanTodos(s.todos),
       startedAt: s.startedAt || null,
       seenAt: Date.now(),
     })

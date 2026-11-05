@@ -34,8 +34,14 @@ export function SignInNotice({ started, local }) {
         <div className={`acct-started ${started.ok ? '' : 'is-bad'}`}>
           {started.ok ? (
             <>
-              A terminal is open running <code>{started.command}</code>. Finish there — this page
-              re-checks itself when you come back.
+              A terminal is open running <code>{started.command}</code>.{' '}
+              {/* A login is a conversation you finish in the terminal; a logout
+                  is over by the time you read this. Telling someone to go
+                  finish something that already happened sends them looking for
+                  a prompt that is not there. */}
+              {started.signingOut
+                ? 'It needs nothing from you — this page re-checks itself when you come back.'
+                : 'Finish there — this page re-checks itself when you come back.'}
             </>
           ) : (
             <>

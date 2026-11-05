@@ -12,6 +12,7 @@ import { EventEmitter } from 'node:events'
 import { projectsDir } from './platform.js'
 import { resolveProjectRoot } from './projects.js'
 import { eventsFromLine } from './activity.js'
+import { PROGRESS_TOOL } from './progress.js'
 
 /** Lines that are internal control noise, not part of the conversation. */
 const NOISE = new Set([
@@ -96,9 +97,23 @@ function imageCount(content) {
   return content.filter((b) => b && b.type === 'image').length
 }
 
+/**
+ * The tool a message is a call to, for the "working ..." line — skipping the
+ * one the panel draws itself.
+ *
+ * A session ticking off its progress list is not doing a piece of work worth
+ * naming; the list it just wrote is already on screen, and announcing
+ * "working mcp__panel__progress" above it would be the panel reporting its
+ * own plumbing back to you.
+ *
+ * Skipped rather than stopping at the first block, because tools are called
+ * in parallel: a turn that ticks a box and starts a build in the same message
+ * must still say it is building.
+ */
 function firstToolName(content) {
   if (!Array.isArray(content)) return null
-  return content.find((b) => b && b.type === 'tool_use')?.name || null
+  const call = content.find((b) => b && b.type === 'tool_use' && b.name !== PROGRESS_TOOL)
+  return call?.name || null
 }
 
 /**
@@ -200,10 +215,36 @@ function collect(rawLines) {
    */
   let activity
 
+  /*
+   * How the session was actually thinking, as opposed to what it was asked to.
+   *
+   * The startup message a session sends carries neither of these, so the panel
+   * had no way to show the effort it was really running at — the chip could
+   * set it and never confirm it — and no way at all to show whether an advisor
+   * was attached. A pairing the API refuses is refused silently: the request
+   * is simply not applied, and a session with no advisor is indistinguishable
+   * from one that has a good one.
+   *
+   * Every assistant line carries both, so the file knows. Read from the newest
+   * one and not merged across the batch: absent means off, so remembering the
+   * last value that was set would report an advisor that has since gone away.
+   *
+   * `undefined` here has the same meaning it has for `activity` above: these
+   * lines said nothing, so the panel keeps what it had.
+   */
+  let granted
+
   for (const line of rawLines) {
     if (!line.trim().startsWith('{')) continue
     let parsed
     try { parsed = JSON.parse(line) } catch { continue }
+
+    if (parsed.type === 'assistant') {
+      granted = {
+        effort: typeof parsed.effort === 'string' ? parsed.effort : null,
+        advisor: typeof parsed.advisorModel === 'string' ? parsed.advisorModel : null,
+      }
+    }
 
     const found = eventsFromLine(parsed)
     for (const event of found.events) events.push(event)
@@ -220,7 +261,7 @@ function collect(rawLines) {
     messages.push(item)
   }
 
-  return { messages, activity, events, failed }
+  return { messages, activity, granted, events, failed }
 }
 
 /** Read a whole transcript and return the last `limit` messages. */
@@ -229,11 +270,11 @@ export function readTranscript(file, { limit = 60, eventLimit = 400 } = {}) {
   try {
     content = fs.readFileSync(file, 'utf8')
   } catch {
-    return { messages: [], size: 0, meta: {}, activity: null, events: [] }
+    return { messages: [], size: 0, meta: {}, activity: null, granted: null, events: [] }
   }
 
   const lines = content.split('\n')
-  const { messages, activity, events, failed } = collect(lines)
+  const { messages, activity, granted, events, failed } = collect(lines)
 
   /*
    * The map is about shape and rhythm, not a complete audit: a long session
@@ -277,6 +318,9 @@ export function readTranscript(file, { limit = 60, eventLimit = 400 } = {}) {
     // A whole-file read always knows the answer: there is no "these lines did
     // not say" when the lines are all of them.
     activity: activity ?? null,
+    // Same reasoning: a whole-file read has seen every turn there is, so "no
+    // assistant line said anything" really is "this session has not spoken".
+    granted: granted ?? null,
     events: recentEvents,
     eventsTruncated: events.filter((event) => event.path).length > fileEvents.length,
     meta,
@@ -317,9 +361,9 @@ export function tailTranscript(file, { fromSize = 0, intervalMs = 700 } = {}) {
       const tail = lines.pop() ?? ''
       offset = size - Buffer.byteLength(tail)
 
-      const { messages, activity, events, failed } = collect(lines)
-      if (messages.length || activity !== undefined || events.length || failed.length) {
-        emitter.emit('update', { messages, activity, events, failed })
+      const { messages, activity, granted, events, failed } = collect(lines)
+      if (messages.length || activity !== undefined || granted !== undefined || events.length || failed.length) {
+        emitter.emit('update', { messages, activity, granted, events, failed })
       }
     } catch {
       // Ignore and retry on the next tick.
@@ -483,7 +527,7 @@ function sessionMeta(file, mtime) {
  *
  * The live registry only knows processes that are still running, so a session
  * disappears the moment it ends. Its transcript does not, and this reads those
- * back — the same files the timeline already renders, listed by project
+ * back — the same files the conversation already renders, listed by project
  * instead of by process.
  *
  * The work is arranged to touch as little as possible. Each directory under

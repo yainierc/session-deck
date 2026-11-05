@@ -30,7 +30,7 @@ import remarkBreaks from 'remark-breaks'
  * worth having for two separate reasons. Verified, not assumed:
  *
  *     'usa <div> y <system-reminder>'  ->  usa &lt;div&gt; y &lt;system-reminder&gt;
- *     'antes <script>alert(1)</script>' ->  antes &lt;script&gt;alert(1)&lt;/script&gt;
+ *     'before <script>alert(1)</script>' ->  before &lt;script&gt;alert(1)&lt;/script&gt;
  *     '[x](javascript:alert(1))'        ->  <a href="">x</a>
  *
  * The first line is the one that is easy to miss. A renderer that *dropped*

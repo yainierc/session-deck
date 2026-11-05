@@ -96,7 +96,7 @@ function Chip({ label, value, amber, title, onOpen, children }) {
   )
 }
 
-export default function SessionControls({ session, deck, modes }) {
+export default function SessionControls({ session, deck, modes, granted }) {
   /*
    * null while nobody has asked. The list belongs to the session — which
    * models a CLI offers changes with the CLI — so it is fetched when a menu
@@ -129,20 +129,39 @@ export default function SessionControls({ session, deck, modes }) {
     && session.requestedModel !== current?.value)
 
   /*
-   * Whether this session tells us the effort it is actually running at.
+   * The effort this session is actually running at.
    *
-   * Measured against a live session rather than assumed: the SDK publishes
-   * the granted level on its init message for terminal- and editor-hosted
-   * sessions, and not for the ones the deck launches itself. So the control
-   * works — setting it is accepted — but it is write-only here.
+   * Not from the session list: the startup message carries the model and not
+   * this, which is why this chip used to be write-only — it could set a level
+   * and never confirm one. Every turn the session takes is written to its
+   * transcript with the effort it ran at, so that is where it is read from,
+   * and `granted` arrives here from the same stream the conversation does.
    *
-   * The chip stays either way, showing what was asked for and saying that is
-   * what it is showing. Hiding it would have hidden a working control; and
-   * dressing the request up as the outcome is the one thing the other two
-   * chips exist to avoid.
+   * `null` is a real answer — this model takes no effort levels, or none was
+   * set — and it is not the same as `undefined`, which is a session that has
+   * not spoken yet and therefore has not said.
    */
-  const effortKnown = session.effort !== undefined
-  const effortAmber = Boolean(effortKnown && session.requestedEffort && session.requestedEffort !== session.effort)
+  const effort = granted ? granted.effort : undefined
+  const effortKnown = effort !== undefined
+  const effortAmber = Boolean(effortKnown && session.requestedEffort && session.requestedEffort !== effort)
+
+  /*
+   * And the advisor, which is the one with teeth.
+   *
+   * A stronger model consulted at the hard moments, and the only one of these
+   * four whose refusal is completely silent: the advisor has to be at least as
+   * capable as the model doing the work, and a pairing the API will not take
+   * is simply never attached. No error, no warning — a session with no advisor
+   * looks exactly like a session with a good one. The transcript is what tells
+   * the two apart.
+   *
+   * There is nothing to set here yet, so this is a reading and not a control.
+   * It earns its place in the row by being the thing you would otherwise have
+   * no way of finding out.
+   */
+  const advisor = granted ? granted.advisor : undefined
+  const advisorAsked = Boolean(session.requestedAdvisor)
+  const advisorAmber = Boolean(advisor !== undefined && advisorAsked && !advisor)
 
   async function choose(action, label) {
     const result = await action()
@@ -192,11 +211,11 @@ export default function SessionControls({ session, deck, modes }) {
 
       <Chip
         label="effort"
-        value={effortKnown ? session.effort || '—' : session.requestedEffort || 'default'}
+        value={effortKnown ? effort || 'default' : session.requestedEffort || 'default'}
         amber={effortAmber}
         onOpen={load}
         title={effortAmber
-          ? `Asked for "${session.requestedEffort}", running "${session.effort || 'none'}"`
+          ? `Asked for "${session.requestedEffort}", running "${effort || 'the model default'}"`
           : 'How hard it thinks before answering'}
       >
           {(close) => (
@@ -204,7 +223,7 @@ export default function SessionControls({ session, deck, modes }) {
               <div className="menu-title">Reasoning effort</div>
               {EFFORT_LEVELS.map((level) => {
                 const allowed = levels.includes(level)
-                const on = level === (effortKnown ? session.effort : session.requestedEffort)
+                const on = level === (effortKnown ? effort : session.requestedEffort)
                 return (
                   <button
                     key={level}
@@ -230,18 +249,65 @@ export default function SessionControls({ session, deck, modes }) {
               </button>
               {effortAmber && (
                 <p className="menu-foot">
-                  Asked for <b>{session.requestedEffort}</b>, running <b>{session.effort || 'none'}</b>.
+                  Asked for <b>{session.requestedEffort}</b>, running{' '}
+                  <b>{effort || 'the model default'}</b>.
                 </p>
               )}
               {!effortKnown && (
                 <p className="menu-foot is-quiet">
-                  This session does not report which level is in force, so the chip shows
-                  what was asked for. Setting it works; reading it back does not.
+                  Read from the turns this session has taken, and it has not taken one yet,
+                  so the chip shows what was asked for.
                 </p>
               )}
             </>
           )}
       </Chip>
+
+      {/*
+        Shown only when there is something to say: either an advisor was asked
+        for, or one turned up. A chip reading "advisor — none" on every session
+        that never wanted one is a row of four controls where three are the
+        answer to a question nobody asked.
+      */}
+      {(advisorAsked || advisor) && (
+        <Chip
+          label="advisor"
+          value={advisor ? shortModel(advisor) : (advisor === null ? 'none' : '—')}
+          amber={advisorAmber}
+          title={advisorAmber
+            ? `Asked for an advisor and this session has none — the pairing was refused`
+            : 'A stronger model consulted at the hard moments'}
+        >
+          {() => (
+            <>
+              <div className="menu-title">Advisor</div>
+              {advisorAmber ? (
+                <p className="menu-foot">
+                  Asked for <b>{session.requestedAdvisor}</b> and this session is running{' '}
+                  <b>without one</b>. An advisor has to be at least as capable as the model
+                  doing the work, and a pairing the API will not take is dropped without an
+                  error. Change the model, or the advisor, and start again.
+                </p>
+              ) : advisor ? (
+                <p className="menu-foot is-quiet">
+                  <b>{shortModel(advisor)}</b> is consulted when this session commits to an
+                  approach, gets stuck, or believes it is done. It reads the whole
+                  conversation each time and none of that is cached, so it is the most
+                  expensive thing that happens here.
+                </p>
+              ) : (
+                <p className="menu-foot is-quiet">
+                  Read from the turns this session has taken, and it has not taken one yet.
+                </p>
+              )}
+              {/* No buttons on purpose: turning one on mid-session does not
+                  reach the turn already in flight, and the honest place to
+                  choose one is the launcher, before there is a conversation
+                  for it to read. */}
+            </>
+          )}
+        </Chip>
+      )}
 
       {modes.length > 0 && (
         <Chip

@@ -26,6 +26,18 @@ export const PERMISSION_MODES = [
     label: 'Auto-accept edits',
     description: 'Writes and edits files without asking. Still asks before running commands.',
   },
+  /*
+   * The middle ground between asking and never asking: a classifier model
+   * reads each call and approves the routine ones, so what reaches you is what
+   * it judged risky. It matters most where an organisation refuses
+   * bypassPermissions — there "Never ask" quietly becomes "Ask me", and this
+   * is the mode that still runs without a card per command.
+   */
+  {
+    id: 'auto',
+    label: 'Auto',
+    description: 'A safety check approves routine actions on its own and only asks about risky ones.',
+  },
   {
     id: 'bypassPermissions',
     label: 'Never ask',

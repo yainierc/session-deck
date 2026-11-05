@@ -4,7 +4,7 @@ import { STATUS_LABEL, shortPath, relativeTime } from './format.js'
 /**
  * Room — what the sessions are saying to each other.
  *
- * The atlas answers "what is everything doing". This answers the question you
+ * The teams screen answers "what is everything doing". This answers the one you
  * have once two of them are working the same repo: what did they agree, who
  * conceded, and are they waiting on me. Until now that lived in two
  * transcripts and could only be read by opening both and going by timestamp.
@@ -227,7 +227,7 @@ export default function Room({ onOpenSession }) {
             <p className="stage-sub">What your sessions say to each other</p>
           </div>
         </header>
-        <div className="atlas-empty">
+        <div className="stage-empty">
           <p>No session has spoken to another one yet.</p>
           <p className="note">
             When one session messages another, the whole exchange appears here as one thread.

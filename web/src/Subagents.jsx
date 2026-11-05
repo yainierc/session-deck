@@ -25,7 +25,7 @@ function agentLabel(agent) {
   return agent.description || agent.type || agent.agentId
 }
 
-export default function Subagents({ sessionId }) {
+export default function Subagents({ sessionId, focus, live }) {
   const [list, setList] = useState(null)
   const [error, setError] = useState(null)
   const [openId, setOpenId] = useState(null)
@@ -79,15 +79,42 @@ export default function Subagents({ sessionId }) {
    * re-reading it on a timer would cost real work on the server for a view
    * that cannot move.
    */
-  const running = (list || []).some((a) => a.running)
+  /*
+   * The transcript calls a background agent finished the moment it is sent
+   * away — its tool call returns at once with a placeholder. A session the
+   * deck drives knows better from its own stream, so where that says an
+   * agent is still up, it is.
+   */
+  const liveIds = new Set((live || []).map((a) => a.toolUseId).filter(Boolean))
+  const isRunning = (a) => a.running || (a.toolUseId != null && liveIds.has(a.toolUseId))
+  const running = (list || []).some(isRunning)
   useEffect(() => {
     if (!running) return
     const timer = setInterval(() => {
       loadList()
-      if (openId && (list || []).find((a) => a.agentId === openId)?.running) loadConvo(openId)
+      if (openId && (list || []).find((a) => a.agentId === openId && isRunning(a))) loadConvo(openId)
     }, POLL_MS)
     return () => clearInterval(timer)
-  }, [running, openId, list, loadList, loadConvo])
+  }, [running, openId, list, live, loadList, loadConvo])
+
+  /*
+   * Arriving from the live count with one agent in mind: open it as soon as
+   * the list can name it. Matched on the tool call that launched it, the one
+   * id the stream and the transcript both carry. `at` makes a second click on
+   * the same row count as a new request.
+   */
+  const focused = useRef(null)
+  useEffect(() => {
+    if (!focus?.toolUseId || !list || focused.current === focus.at) return
+    const agent = list.find((a) => a.toolUseId === focus.toolUseId)
+    if (!agent) return
+    focused.current = focus.at
+    if (openId !== agent.agentId) {
+      setOpenId(agent.agentId)
+      setConvo(null)
+      loadConvo(agent.agentId)
+    }
+  }, [focus, list, openId, loadConvo])
 
   function open(agentId) {
     if (openId === agentId) {
@@ -119,9 +146,9 @@ export default function Subagents({ sessionId }) {
             type="button"
             className={`row agent-row ${openId === agent.agentId ? 'is-on' : ''}`}
             onClick={() => open(agent.agentId)}
-            title={agent.running ? 'Running — click to read what it is saying' : 'Click to read what it said'}
+            title={isRunning(agent) ? 'Running — click to read what it is saying' : 'Click to read what it said'}
           >
-            <span className={`dot dot-${agent.running ? 'busy' : 'idle'}`} />
+            <span className={`dot dot-${isRunning(agent) ? 'busy' : 'idle'}`} />
             <span className="row-name">{agentLabel(agent)}</span>
             {agent.type && agent.description && <span className="row-meta">{agent.type}</span>}
           </button>

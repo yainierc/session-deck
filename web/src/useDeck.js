@@ -6,7 +6,9 @@ import { useEffect, useRef, useState, useCallback } from 'react'
  * same pipe. If the connection drops it retries with growing backoff so it
  * never hammers the server.
  */
-const EMPTY = { sessionId: null, messages: [], meta: {}, activity: null, events: [], loading: false }
+const EMPTY = {
+  sessionId: null, messages: [], meta: {}, activity: null, granted: null, events: [], loading: false,
+}
 
 /**
  * How many file events the map keeps in memory.
@@ -84,6 +86,7 @@ export function useDeck() {
               // the transcript rotated.
               meta: msg.meta ?? prev.meta,
               activity: msg.activity || null,
+              granted: msg.granted ?? null,
               events: msg.events || [],
               eventsTruncated: Boolean(msg.eventsTruncated),
               total: msg.total || 0,
@@ -108,6 +111,12 @@ export function useDeck() {
              * the tool it ran an hour ago.
              */
             activity: 'activity' in msg ? msg.activity : prev.activity,
+            /*
+             * Same tri-state, same reason. A batch with no assistant line in
+             * it says nothing about the advisor, and reading that as "no
+             * advisor" would blink the chip off between every turn.
+             */
+            granted: 'granted' in msg ? msg.granted : prev.granted,
             // A failure lands on a later line than the call it belongs to.
             events: markFailed(events, msg.failed),
             loading: false,
@@ -164,13 +173,23 @@ export function useDeck() {
     select,
     selected: transcript.sessionId,
     /*
+     * An object rather than eight positional arguments. Five was already the
+     * point where a caller has to count commas to see which one is the name,
+     * and how a session thinks — its model, its effort, whether it consults an
+     * advisor — adds three more that are all optional and all strings.
+     *
      * `peers` are addresses, not labels: the names the new session will be
      * told to write into SendMessage. The server resolves them against the
      * live list before anything is introduced, so one that has exited between
      * the click and the launch is dropped rather than promised.
      */
-    launch: (cwd, prompt, permissionMode, name, peers) =>
-      command({ type: 'launch', cwd, prompt, permissionMode, name, peers }),
+    launch: (options) => command({ type: 'launch', ...options }),
+    /*
+     * A whole team. The server decides the order they come up in — the one
+     * that hands out the work goes last so it is introduced to everybody — so
+     * what goes out is a set, not a sequence.
+     */
+    team: (options) => command({ type: 'team', ...options }),
     rename: (deckId, name) => command({ type: 'rename', deckId, name }),
     /*
      * The other name: the one Claude Code keeps in the session's own file, for
@@ -182,8 +201,20 @@ export function useDeck() {
     answer: (deckId, requestId, decision) => command({ type: 'permission', deckId, requestId, decision }),
     answerQuestion: (deckId, requestId, answers) =>
       command({ type: 'answer', deckId, requestId, answers }),
-    say: (deckId, text, images, files) => command({ type: 'say', deckId, text, images, files }),
+    /*
+     * Four kinds of thing can ride along with what you typed: images and text
+     * files inline, and PDFs as their own content block — a PDF read as text
+     * is mojibake, so it is the one attachment that cannot travel that way.
+     */
+    say: (deckId, text, images, files, documents) =>
+      command({ type: 'say', deckId, text, images, files, documents }),
     setMode: (deckId, permissionMode) => command({ type: 'mode', deckId, permissionMode }),
+    /*
+     * Put the progress strip away. The list itself arrives on the session
+     * object like every other managed field, so there is nothing to read
+     * here — only this one way to write it, and in practice only with [].
+     */
+    clearTodos: (deckId) => command({ type: 'todos', deckId, todos: [] }),
     interrupt: (deckId) => command({ type: 'interrupt', deckId }),
     /*
      * How full this session's context window is. Only the deck's own sessions
@@ -204,6 +235,12 @@ export function useDeck() {
      * you want is the session ready rather than the session answering.
      */
     wake: (deckId) => command({ type: 'wake', deckId }),
+    /*
+     * The same wake, for a set. A restart puts a whole team to sleep at once,
+     * and bringing it back one card at a time is the press you should not
+     * have to make six times. The caller picks who is in the set.
+     */
+    wakeMany: (deckIds) => command({ type: 'wake', deckIds }),
     stop: (deckId) => command({ type: 'stop', deckId }),
     /*
      * Take charge of a conversation already on disk — one out of a project's

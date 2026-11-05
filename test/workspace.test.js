@@ -94,3 +94,53 @@ test('a folder added while the menu was on screen is not dropped by a move', () 
   assert.deepEqual(order().sort(), ['project-1', 'project-2', 'project-3'])
   assert.equal(workspace.list().length, 3)
 })
+
+test('a project can be called something other than its folder', () => {
+  const [one, two] = scratch(2)
+  workspace.add(one)
+  workspace.add(two)
+
+  assert.deepEqual(workspace.rename(one, '  X1   Platform  '), {
+    ok: true,
+    name: 'X1 Platform',
+    label: 'X1 Platform',
+  })
+
+  const entry = workspace.list().find((f) => f.path === one)
+  // The name the sidebar shows is the label; where it lives is still on hand.
+  assert.equal(entry.name, 'X1 Platform')
+  assert.equal(entry.folderName, 'project-1')
+  assert.equal(workspace.nameFor(one), 'X1 Platform')
+  // Naming one project says nothing about the others.
+  assert.equal(workspace.list().find((f) => f.path === two).name, 'project-2')
+  assert.equal(workspace.nameFor(two), 'project-2')
+})
+
+test('emptying the name gives the folder back, and does not leave a trace', () => {
+  const [one] = scratch(1)
+  workspace.add(one)
+  workspace.rename(one, 'Accounting')
+
+  assert.deepEqual(workspace.rename(one, '   '), { ok: true, name: 'project-1', label: null })
+
+  const entry = workspace.list().find((f) => f.path === one)
+  assert.equal(entry.name, 'project-1')
+  assert.equal(entry.label, null)
+  // Cleared, not blanked: an empty string on disk would come back as a label.
+  assert.equal('label' in JSON.parse(fs.readFileSync(path.join(process.env.SESSION_DECK_DIR, 'workspace.json'), 'utf8')).folders[0], false)
+})
+
+test('a name survives a reorder, and only a tracked folder can have one', () => {
+  const [one, two] = scratch(2)
+  workspace.add(one)
+  workspace.add(two)
+  workspace.rename(one, 'Ledger')
+
+  workspace.move(one, 'up')
+  assert.equal(workspace.list().find((f) => f.path === one).name, 'Ledger')
+
+  assert.equal(workspace.rename('/not/in/the/workspace', 'Hello').ok, false)
+  assert.equal(workspace.rename(one, 'x'.repeat(61)).ok, false)
+  // Rejected means nothing was written, not that a 60-character prefix was.
+  assert.equal(workspace.list().find((f) => f.path === one).name, 'Ledger')
+})

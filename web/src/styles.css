@@ -747,7 +747,9 @@ body {
   letter-spacing: 0.07em;
   color: var(--muted);
 }
-.draft-docs { display: flex; flex-direction: column; gap: 2px; }
+/* Capped rather than endless: the list can be the whole project, and a modal
+   that grows past the viewport hides its own buttons. */
+.draft-docs { display: flex; flex-direction: column; gap: 2px; max-height: 40vh; overflow-y: auto; }
 .draft-doc {
   display: flex;
   align-items: center;
@@ -760,6 +762,7 @@ body {
 .draft-doc:hover { background: var(--panel-2); }
 .draft-doc.is-on { background: var(--panel-2); }
 .draft-doc span { overflow-wrap: anywhere; }
+.draft-doc .row-meta { margin-left: auto; flex: none; padding-left: 10px; }
 
 .draft-path, .draft-note {
   width: 100%;
@@ -848,153 +851,22 @@ body {
 .agent-meta { margin: 0 0 16px; }
 .note { color: var(--dim); font-size: 12.5px; }
 
-/* ---------- the file map ---------- */
+/* The ask, under a view that is not the conversation. The Agents tab draws
+   what a subagent said; a question parked on the session itself outranks it,
+   and has to be answerable without going back to the chat. */
+.view-permission { padding: 0 20px 16px; }
+
+/* ---------- one session, as a card ---------- */
 
 /*
- * The palette here is deliberately NOT the app's accent colours: the three
- * folder hues were validated as an all-pairs set against this surface for
- * colour-blind and normal-vision separation. See FileMap.jsx before changing
- * any of them — they are load-bearing, not decorative.
+ * Drawn by the teams screen, and by it alone now. The other caller was the
+ * atlas — every running session as a grid of live file maps, ordered by who
+ * had touched most files — and it went when the teams screen turned out to
+ * answer the same question with the arrangement you declared rather than one
+ * worked out from activity.
  */
-.map { flex: 1; display: flex; flex-direction: column; min-height: 0; padding: 16px 20px 14px;
-  /* The zoom control anchors to this, not to the viewport. */
-  position: relative; }
 
-.map-stats { display: flex; gap: 26px; margin-bottom: 10px; flex: none; }
-.map-stat { display: flex; flex-direction: column; }
-.map-stat-value { font-size: 21px; font-weight: 600; line-height: 1.1; }
-.map-stat-value.is-critical { color: #d03b3b; }
-.map-stat-label {
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.07em;
-  color: var(--dim);
-}
-
-.map-canvas { position: relative; flex: 1; min-height: 220px; }
-.map-canvas canvas { display: block; }
-
-.map-tip {
-  position: absolute;
-  transform: translate(-50%, -100%);
-  pointer-events: none;
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: 7px;
-  padding: 7px 10px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
-  white-space: nowrap;
-  font-size: 11.5px;
-  z-index: 2;
-}
-.map-tip strong { font-size: 12.5px; }
-.map-tip-path { color: var(--dim); font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 10.5px; }
-.map-tip-counts { color: var(--muted); }
-.map-tip-failed { color: #ff8f8f; }
-.map-tip-last { color: var(--dim); }
-
-.map-caption {
-  flex: none;
-  margin: 8px 0 0;
-  font-size: 11.5px;
-  color: var(--muted);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.map-caption-tool {
-  color: var(--dim);
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  margin-right: 8px;
-}
-
-.map-legend {
-  flex: none;
-  margin-top: 10px;
-  padding-top: 10px;
-  border-top: 1px solid var(--line);
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-.map-legend-row { display: flex; flex-wrap: wrap; align-items: center; gap: 14px; }
-.map-key {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 11px;
-  color: var(--muted);
-  font-family: ui-monospace, "SF Mono", Menlo, monospace;
-}
-.map-legend-shapes .map-key { font-family: inherit; color: var(--dim); }
-.map-key-count { color: var(--dim); font-family: inherit; }
-.map-key-note { margin-left: auto; font-style: italic; }
-.map-swatch { width: 9px; height: 9px; border-radius: 50%; flex: none; }
-.map-shape { width: 9px; height: 9px; border-radius: 50%; flex: none; }
-.map-shape.is-ring { border: 1.5px solid var(--muted); }
-.map-shape.is-solid { background: var(--muted); }
-.map-shape.is-new { background: var(--muted); box-shadow: 0 0 0 2px var(--panel), 0 0 0 3px var(--muted); }
-.map-shape.is-failed {
-  width: auto;
-  height: auto;
-  color: #d03b3b;
-  font-size: 10px;
-}
-
-.map-empty {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 4px;
-}
-.map-empty p { margin: 0; }
-
-.map-permission { padding: 0 20px 16px; }
-
-.map.is-compact { padding: 0; }
-.map.is-compact .map-canvas { min-height: 0; }
-.map.is-compact .map-empty { font-size: 11.5px; color: var(--dim); }
-
-/* ---------- the timeline ---------- */
-
-.river { flex: 1; display: flex; flex-direction: column; min-height: 0; padding: 16px 20px 14px; }
-.river-scroll { flex: 1; min-height: 0; overflow-y: auto; position: relative; }
-.river svg { display: block; }
-
-.river-name {
-  fill: var(--muted);
-  font-family: ui-monospace, "SF Mono", Menlo, monospace;
-  font-size: 10.5px;
-}
-.river-tick {
-  fill: var(--dim);
-  font-size: 10px;
-  font-variant-numeric: tabular-nums;
-}
-.river-gap { fill: var(--dim); font-size: 9.5px; font-style: italic; }
-.river-mark { cursor: default; }
-
-/* ---------- the atlas ---------- */
-
-.atlas {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  padding: 16px 20px 20px;
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(330px, 1fr));
-  gap: 14px;
-  align-content: start;
-}
-
-.atlas-card {
+.session-card {
   display: flex;
   flex-direction: column;
   gap: 6px;
@@ -1005,16 +877,31 @@ body {
   color: inherit;
   font: inherit;
   text-align: left;
-  cursor: pointer;
 }
-.atlas-card:hover { border-color: var(--dim); }
-/* Something happened in here in the last couple of minutes. */
-.atlas-card.is-live { border-color: rgba(76, 141, 255, 0.45); }
+.session-card:hover { border-color: var(--dim); }
+/* Stopped, and waiting on you. The only state that moves the border: there
+   was a second one for "something happened here in the last two minutes",
+   read off the file activity the map was drawing, and it went with the map.
+   Busy is not news. Stopped is. */
+.session-card.is-asking { border-color: var(--waiting); }
 
-.atlas-head { display: flex; align-items: center; gap: 8px; }
-.atlas-name { font-size: 13px; font-weight: 600; }
-.atlas-state { margin-left: auto; font-size: 11px; color: var(--muted); }
-.atlas-where {
+.session-card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: none;
+  border: 0;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  width: 100%;
+}
+.session-card-head:hover .session-card-name { text-decoration: underline; }
+.session-card-name { font-size: 13px; font-weight: 600; }
+.session-card-state { margin-left: auto; font-size: 11px; color: var(--muted); }
+.session-card-where {
   font-family: ui-monospace, "SF Mono", Menlo, monospace;
   font-size: 10.5px;
   color: var(--dim);
@@ -1022,18 +909,24 @@ body {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.atlas-map { height: 196px; display: flex; }
-.atlas-foot {
-  display: flex;
-  gap: 14px;
-  font-size: 11px;
-  color: var(--muted);
-  border-top: 1px solid var(--line);
-  padding-top: 8px;
-}
-.atlas-foot .is-critical { color: #d03b3b; }
 
-.atlas-empty {
+/* The ask, in the body of the card. The height is kept from when the map sat
+   here: the toast styles carry the ask itself, and the command you are about
+   to allow is the whole decision — it gets the room a corner cannot give it. */
+.session-card-ask {
+  min-height: 196px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+}
+.session-card-ask .toast-detail { max-height: 9.2em; }
+.session-card-ask .toast-actions { margin-top: 10px; }
+
+.stage-waiting { color: var(--waiting); }
+
+/* Nothing to draw, on any stage that can be empty. */
+.stage-empty {
   flex: 1;
   display: flex;
   flex-direction: column;
@@ -1041,7 +934,7 @@ body {
   justify-content: center;
   gap: 6px;
 }
-.atlas-empty h3 { margin: 0; }
+.stage-empty h3 { margin: 0; }
 
 .badge-quiet { background: transparent; border: 1px solid var(--line); color: var(--dim); }
 
@@ -1210,7 +1103,7 @@ body {
 
 /*
  * An identifier in a cell is never broken across lines. It came out as
- * "events/selfse / rve/" and "x1plat-dev- / core-aca", which defeats the
+ * "orders/dispa / tch/" and "acme-dev- / core-api", which defeats the
  * point of the table: the cells are where the names live, and a name you
  * have to reassemble by eye is worse than no table at all.
  *
@@ -2129,6 +2022,234 @@ body {
   cursor: pointer;
 }
 
+/* The evidence beside the verdict: present, and below it. */
+.flag.is-quiet { color: var(--dim); border-color: transparent; background: transparent; padding-left: 0; }
+
+/* ---------- pick up ---------- */
+
+/*
+ * One card per plan in flight. The order inside is the change of hat: the
+ * goal and the figures on top, what you look at while supervising; below,
+ * where it stopped and what can be started, what you need when you go back
+ * to work. No navigation between the two — when you are both the one doing
+ * and the one watching, one more click is a step that does not get taken.
+ */
+/*
+ * `.stage` is a flex column with overflow hidden: the child that scrolls has
+ * to declare it itself, as `.transcript` and `.roadmap` already do. Without
+ * this line the list draws whole and is cut at the bottom, and in a workspace
+ * with twelve plans in flight that leaves nine off screen with no way to get
+ * to them.
+ */
+.pu-list { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 16px; padding: 4px 20px 60px; }
+/*
+ * `flex: none`, and not for looks: in a flex column children shrink by
+ * default, so the twelve cards were compressing to fit the available height
+ * instead of overflowing — and a list that does not overflow does not
+ * scroll. The symptom was scrollHeight identical to clientHeight with nine
+ * plans off screen.
+ */
+.pu-plan { flex: none; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+
+.pu-head { padding: 16px 20px 0; }
+.pu-ident { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; font-size: 11.5px; }
+.pu-id { font-family: ui-monospace, Menlo, monospace; color: var(--muted); }
+.pu-proj { color: var(--dim); cursor: pointer; }
+.pu-proj:hover { color: var(--accent); }
+.pu-owner { color: var(--dim); margin-left: auto; }
+/* A plan that is not on the branch you have open: it exists in the project,
+   but not where you stand, and starting it means going to that worktree. */
+.pu-else { font-size: 11px; color: var(--waiting); border: 1px solid #3a2f1d;
+  border-radius: 5px; padding: 1px 7px; }
+.pu-title { margin: 6px 0 0; font-size: 16px; font-weight: 600; letter-spacing: -0.01em; line-height: 1.3; }
+
+.pu-meters { display: flex; align-items: center; gap: 22px; flex-wrap: wrap; padding: 14px 20px 16px; }
+.pu-meter { min-width: 0; }
+.pu-v { font-size: 17px; font-weight: 600; font-variant-numeric: tabular-nums; letter-spacing: -0.01em; }
+.pu-k { font-size: 11.5px; color: var(--dim); margin-top: 1px; }
+/* The days in red, and only the days: it is the one figure here that is bad
+   news on its own, and the only one with nothing else to tell you. */
+.pu-meter.is-stale .pu-v { color: #ff8f8f; }
+.pu-track { flex: 1 1 160px; min-width: 120px; }
+.pu-bar { height: 6px; border-radius: 3px; background: var(--panel-2); overflow: hidden; }
+.pu-bar i { display: block; height: 100%; background: var(--idle); }
+
+.pu-resume { padding: 14px 20px; background: #15120e; border-top: 1px solid var(--line); }
+.pu-rhead { font: 10.5px ui-monospace, Menlo, monospace; color: var(--waiting);
+  letter-spacing: 0.07em; text-transform: uppercase; }
+.pu-rwhat { font-size: 14.5px; font-weight: 600; margin-top: 6px; }
+.pu-outcome { color: var(--muted); font-weight: 400; }
+.pu-rwhen { font-size: 12px; color: var(--muted); margin-top: 3px; }
+.pu-rnote { font-size: 12.5px; color: var(--dim); margin: 9px 0 0; line-height: 1.5;
+  border-left: 2px solid #3a2f1d; padding-left: 12px; }
+
+.pu-next { padding: 13px 20px 15px; border-top: 1px solid var(--line); }
+.pu-nhead { font: 10.5px ui-monospace, Menlo, monospace; color: var(--idle);
+  letter-spacing: 0.07em; text-transform: uppercase; margin-bottom: 9px; }
+.pu-ready { display: flex; align-items: baseline; gap: 12px; padding: 5px 0; font-size: 13px; }
+.pu-rid { font: 12px ui-monospace, Menlo, monospace; color: var(--text); flex: none; min-width: 180px; }
+.pu-rtitle { color: var(--muted); flex: 1 1 auto; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pu-rest { font: 11.5px ui-monospace, Menlo, monospace; color: var(--dim); flex: none; }
+.pu-none { font-size: 12.5px; color: var(--dim); margin: 0; padding: 12px 20px 14px;
+  border-top: 1px solid var(--line); }
+
+@media (max-width: 720px) {
+  .pu-list { padding: 4px 12px 60px; }
+  .pu-rid { min-width: 0; }
+  .pu-ready { flex-wrap: wrap; gap: 6px 10px; }
+}
+
+/* The project filter and what is set aside, above the list and outside the
+   scroll: the two controls that say what is below is not all of it. */
+.pu-filter { display: flex; flex-wrap: wrap; gap: 7px; padding: 0 20px 12px; flex: none; }
+.pu-chip { font: inherit; font-size: 12px; background: transparent; color: var(--muted);
+  border: 1px solid var(--line); border-radius: 999px; padding: 3px 11px; cursor: pointer; }
+.pu-chip:hover { color: var(--text); border-color: #3a414e; }
+.pu-chip.is-on { background: var(--panel-2); color: var(--text); border-color: #3a414e; }
+.pu-n { font-family: ui-monospace, Menlo, monospace; font-size: 11px; color: var(--dim); margin-left: 3px; }
+.pu-chip.is-on .pu-n { color: var(--muted); }
+
+.pu-put { flex: none; padding: 0 20px 12px; font-size: 12px; color: var(--dim); }
+.pu-put > summary { cursor: pointer; list-style: none; display: flex; align-items: center; gap: 7px; }
+.pu-put > summary::-webkit-details-marker { display: none; }
+.pu-putlist { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 8px; }
+.pu-caret { color: var(--dim); font-size: 10px; transition: transform 0.12s ease; }
+details[open] > summary .pu-caret { transform: rotate(90deg); }
+
+/* The ones that keep no record: present, at the bottom, the why beside them. */
+.pu-quiet { flex: none; margin-top: 4px; border: 1px solid var(--line); border-radius: 10px;
+  background: #101317; padding: 12px 16px; }
+.pu-quiet > summary { cursor: pointer; list-style: none; display: flex; align-items: center;
+  gap: 8px; font-size: 12.5px; color: var(--muted); }
+.pu-quiet > summary::-webkit-details-marker { display: none; }
+.pu-qhint { color: var(--dim); font-size: 11.5px; }
+.pu-qrow { display: flex; align-items: baseline; gap: 11px; padding: 7px 0 0; font-size: 12.5px; }
+.pu-qid { font: 11.5px ui-monospace, Menlo, monospace; color: var(--muted); flex: none; min-width: 150px; }
+.pu-qtitle { color: var(--dim); flex: 1 1 auto; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pu-qprog { font: 11px ui-monospace, Menlo, monospace; color: var(--dim); flex: none; }
+.pu-qproj { font-size: 11px; color: var(--dim); flex: none; }
+.pu-back { font: 11px ui-monospace, Menlo, monospace; background: transparent; color: var(--muted);
+  border: 1px solid var(--line); border-radius: 5px; padding: 2px 8px; cursor: pointer; }
+.pu-back:hover { color: var(--text); border-color: #3a414e; }
+
+.pu-hide { margin-left: auto; font: inherit; font-size: 14px; line-height: 1; background: none;
+  border: 0; color: var(--dim); cursor: pointer; padding: 0 2px; }
+.pu-hide:hover { color: var(--text); }
+/* The owner stops pushing to the right: that spot belongs to the × now. */
+.pu-owner { color: var(--dim); margin-left: auto; }
+.pu-ident .pu-hide { margin-left: 4px; }
+
+/* ---------- progress ---------- */
+
+/*
+ * The session's checklist, sitting directly on top of the composer. It shares
+ * the composer's panel colour and takes the border-top, so folded it reads as
+ * one more row of the box rather than as a floating card.
+ */
+.progress {
+  border-top: 1px solid var(--line);
+  background: var(--panel);
+  padding: 6px 20px 8px;
+  max-height: 38vh;
+  overflow-y: auto;
+}
+.progress-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+/* The whole row is the disclosure control, so it is a button stripped of
+   every button affordance rather than a div with a click handler. */
+.progress-toggle {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 2px 0;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.progress-toggle:hover { color: var(--text); }
+.progress-caret {
+  display: inline-block;
+  color: var(--dim);
+  transition: transform 0.12s ease;
+}
+.progress-caret.is-open { transform: rotate(90deg); }
+.progress-count {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+/* The folded line: one step, truncated rather than wrapped, because this row
+   must stay one row however long the step is. */
+.progress-current {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--dim);
+}
+.progress-clear {
+  flex: none;
+  border: 0;
+  background: none;
+  color: var(--dim);
+  font-size: 14px;
+  line-height: 1;
+  padding: 2px 4px;
+  cursor: pointer;
+}
+.progress-clear:hover { color: var(--text); }
+
+.progress-items {
+  margin: 4px 0 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.progress-item {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--muted);
+}
+.progress-mark { flex: none; font-size: 10px; }
+.progress-text { min-width: 0; }
+
+/* Three states, and never by colour alone — the glyph differs too, and the
+   screen-reader text spells the state out. */
+.progress-item.is-completed { color: var(--dim); }
+.progress-item.is-completed .progress-mark { color: var(--idle); }
+.progress-item.is-completed .progress-text { text-decoration: line-through; }
+.progress-item.is-in_progress { color: var(--text); }
+.progress-item.is-in_progress .progress-mark { color: var(--waiting); }
+.progress-item.is-pending .progress-mark { color: var(--dim); }
+
+/* Visible to a screen reader, to nobody else. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 /* ---------- composer ---------- */
 
 .composer {
@@ -2215,6 +2336,18 @@ body {
   cursor: pointer;
 }
 .composer-doc button:hover { color: var(--text); background: var(--line); }
+
+/* A PDF is not the same kind of attachment as a .md and should not look like
+   one: it is read page by page, as pictures as well as words, so it costs far
+   more context than the same spec in markdown. The tag is the warning. */
+.composer-doc.is-pdf { border-color: #4a3a1c; }
+.composer-doc-kind {
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: var(--waiting);
+  margin-right: 6px;
+}
 .composer-error { margin: 0; font-size: 12px; color: var(--danger, #e5534b); }
 /* Not an error: the message was accepted, it is just behind something. */
 .composer-note { margin: 0; font-size: 12px; color: var(--muted, #a0a0ab); }
@@ -2308,6 +2441,29 @@ body {
 }
 .project-name:hover { color: var(--text); }
 .project.is-here .project-name:hover, .project.is-page .project-name:hover { color: #fff; }
+
+/*
+ * The heading while you are typing it.
+ *
+ * Deliberately the same box the heading occupies -- same flex growth, same
+ * font, same 12.5px/600 -- so opening the editor does not move the two buttons
+ * beside it or change the width the name is being judged at. What you type is
+ * the size it will be, in the place it will be.
+ */
+.project-rename { flex: 1; min-width: 0; display: flex; margin: 0 0 1px; }
+.project-rename input {
+  width: 100%;
+  min-width: 0;
+  padding: 0 3px;
+  background: var(--panel-2);
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+.project-rename input:focus { outline: none; }
 
 .icon-btn {
   flex: none;
@@ -2751,6 +2907,42 @@ body {
 .chip-side:hover { color: var(--accent); background: #232936; }
 .chip-side.is-danger:hover { color: #ff8f8f; }
 
+/* A shortcut that asks for a model, an effort or an advisor of its own. The
+   name is what you read; this only has to say "there is more behind me". */
+.chip-marked { margin-left: 5px; color: var(--accent); font-weight: 700; }
+
+/* ---------- how a launch should think ---------- */
+
+.how { display: flex; gap: 8px; align-items: flex-end; flex-wrap: wrap; }
+.how-one { display: flex; flex-direction: column; gap: 4px; flex: 1; min-width: 108px; }
+.how-one > span { font-size: 11px; color: var(--dim); }
+.how-one select {
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  padding: 6px 8px;
+  width: 100%;
+}
+.how-one select:focus { outline: none; border-color: var(--accent); }
+.how-advisor {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 31px;
+  padding: 0 11px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font-size: 13px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.how-advisor input { accent-color: var(--accent); margin: 0; }
+.how-advisor.is-on { border-color: var(--accent); color: #cfe0ff; }
+
 .preset-editor {
   display: flex;
   flex-wrap: wrap;
@@ -2759,6 +2951,639 @@ body {
   padding-top: 11px;
   border-top: 1px solid var(--line);
 }
+.preset-how { flex-basis: 100%; margin: 2px 0 0; }
+
+/* ---------- a team, composed before it exists ---------- */
+
+/* Wider than the task modal because this one is a table, not a sentence. */
+.modal-wide { max-width: 760px; }
+
+.composer {
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 13px 14px;
+  margin-top: 12px;
+}
+.crow {
+  display: grid;
+  grid-template-columns: 1.1fr 1.1fr .9fr .9fr auto auto;
+  gap: 9px;
+  align-items: end;
+}
+@media (max-width: 760px) { .crow { grid-template-columns: 1fr 1fr; } }
+.crow .f { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.crow .f > span {
+  font-size: 11px;
+  color: var(--dim);
+  /* Beside the label, with a separator between them. Glued to the word it
+     read as the field's name — "Role manage" — and pushed to the far end of
+     the column it sat under the next control and looked like its label. */
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+}
+.crow select {
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  padding: 6px 8px;
+  width: 100%;
+}
+.crow .f.toggle { justify-content: flex-end; }
+.swx {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 31px;
+  padding: 0 10px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font-size: 13px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.swx input { accent-color: var(--accent); margin: 0; }
+.swx.is-on { border-color: var(--accent); color: #cfe0ff; }
+
+/* ---------- writing down what a session is for ---------- */
+
+.roles-pane { margin-top: 12px; }
+.roles-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding-bottom: 9px;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 12px;
+}
+.roles-head strong { font-size: 14px; }
+.roles-head .linkish { margin-left: auto; }
+
+.roles-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 46vh;
+  overflow-y: auto;
+  /* Faded rather than cut, for the same reason: the last role was being
+     sliced through the middle of a word with the buttons floating over it. */
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 2em), transparent);
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 2em), transparent);
+  padding-bottom: 4px;
+}
+.role-row {
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+.role-row-top { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+.role-row-name { font-weight: 600; font-size: 13px; }
+.role-row-top .pill {
+  font-size: 11px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 2px 8px;
+  color: var(--muted);
+}
+.role-row-top .pill b { color: #cbd3e0; font-weight: 600; }
+.role-row-top .pill.adv { border-color: #2c4c82; color: #9dbcf0; }
+.role-row-top .pill.lead { border-color: #3a2f1d; color: var(--waiting); }
+.role-row-actions { margin-left: auto; display: flex; gap: 10px; }
+.role-row-brief {
+  margin: 7px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--muted);
+  white-space: pre-wrap;
+}
+/* The one checkbox that is not a chip: it changes the order sessions start in,
+   which is what decides who knows whom. */
+.role-lead {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13px;
+  color: var(--muted);
+  cursor: pointer;
+  margin-top: 4px;
+}
+.role-lead input { accent-color: var(--accent); margin: 0; }
+
+/* The action on the label of the control it acts on, beside it. */
+.f-side {
+  font-size: 11px;
+  text-transform: none;
+  letter-spacing: 0;
+}
+.f-side:before { content: '· '; color: var(--line); }
+
+.linkish.is-danger { color: #e2b0b0; }
+
+/* The brief of the role you are about to staff with. Worth seeing before you
+   add it: it is what that session will be told to be, and it is the only part
+   of a role that is not a word in a dropdown. */
+.role-brief {
+  margin: 10px 0 0;
+  padding: 9px 11px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--muted);
+  white-space: pre-wrap;
+  /* A multiple of the line height, so the cut lands between lines instead of
+     slicing one in half — and faded at the bottom, because a hard edge reads
+     as the end of the text rather than as the top of a scroll. */
+  max-height: 7.5em;
+  overflow-y: auto;
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 1.5em), transparent);
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 1.5em), transparent);
+}
+
+/* The address it will answer to, worked out before the session exists —
+   because two members called "Backend" are two identical rows otherwise. */
+.team-addr {
+  margin: 10px 0 0;
+  font-size: 12px;
+  color: var(--dim);
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+.team-addr b { font-family: ui-monospace, "SF Mono", Menlo, monospace; color: #8fa4c4; font-weight: 500; }
+.team-lead { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+.team-lead input { accent-color: var(--accent); margin: 0; }
+
+.team {
+  margin: 12px 0 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  overflow: hidden;
+  max-height: 260px;
+  overflow-y: auto;
+}
+.team-empty { padding: 18px; text-align: center; color: var(--dim); font-size: 13px; margin: 0; }
+.tgroup-head {
+  padding: 6px 13px;
+  background: var(--panel-2);
+  font-size: 11px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--dim);
+  border-top: 1px solid var(--line);
+}
+.tgroup:first-child .tgroup-head { border-top: 0; }
+.member {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 13px;
+  border-top: 1px solid var(--line);
+}
+.member.is-bad { background: rgba(208, 59, 59, 0.07); }
+.m-name { font-weight: 600; font-size: 13px; min-width: 86px; }
+.m-addr { font: 11.5px/1 ui-monospace, "SF Mono", Menlo, monospace; color: #8fa4c4; }
+.m-meta { display: flex; gap: 5px; margin-left: auto; flex-wrap: wrap; justify-content: flex-end; }
+.m-meta .pill {
+  font-size: 11px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 2px 8px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.m-meta .pill b { color: #cbd3e0; font-weight: 600; }
+.m-meta .pill.adv { border-color: #2c4c82; color: #9dbcf0; }
+.m-meta .pill.lead { border-color: #3a2f1d; color: var(--waiting); }
+/* Taken from the role rather than set on this row. Still shown, because the
+   question is what this seat will run with — but quieter, because it is not a
+   decision somebody made here. */
+.m-meta .pill.is-inherited { opacity: 0.6; border-style: dashed; }
+.m-meta .pill.is-warn { border-color: #4a2020; color: #e2b0b0; }
+.m-drop {
+  background: none;
+  border: 0;
+  color: var(--dim);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 2px;
+}
+.m-drop:hover { color: var(--critical); }
+.team-warn { color: var(--waiting); }
+
+/* ---------- the team, arranged ---------- */
+
+.team-stage {
+  position: relative;
+  padding: 14px 16px 18px;
+}
+
+/* Under the cards and deaf to the mouse: a line is something to read, never
+   something to click, and an overlay that swallows clicks is a card whose
+   buttons stop working. */
+.team-wires {
+  position: absolute;
+  inset: 14px 16px auto;
+  pointer-events: none;
+  overflow: visible;
+  z-index: 0;
+}
+.team-wire {
+  fill: none;
+  stroke: var(--line);
+  stroke-width: 1;
+}
+/* Something was said across it recently. The only thing on this screen that
+   changes without you doing anything, and it changes because of a message. */
+.team-wire.is-recent { stroke: var(--dim); stroke-width: 1.4; }
+
+.team-leads { position: relative; z-index: 1; margin-bottom: 26px; }
+.team-row { display: flex; gap: 14px; flex-wrap: wrap; }
+
+.team-band {
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--dim);
+  margin-bottom: 8px;
+  display: flex;
+  align-items: center;
+}
+/*
+ * The label carries the page's own background so a line passing behind it is
+ * interrupted rather than drawn through the letters. A line crossing the rule
+ * beside it reads as a line crossing a rule; one crossing the words reads as
+ * damage, and the first thing it made unreadable was the name of the project.
+ */
+.team-band span {
+  background: var(--bg);
+  padding-right: 9px;
+  position: relative;
+  z-index: 1;
+}
+.team-band:after {
+  content: '';
+  flex: 1;
+  border-top: 1px solid var(--line);
+}
+
+.team-columns {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  /* auto-fill and not auto-fit: with one project the row would otherwise
+     stretch that single column across the whole screen, and a card four times
+     the width of the one above it reads as a different kind of thing. Empty
+     tracks keep their width and cost nothing. */
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 18px;
+  align-items: start;
+}
+.team-column { display: flex; flex-direction: column; gap: 12px; }
+/* The slot, not the card, is what gets measured for the lines: the card's own
+   height changes when a question parks on it, and the slot is what the grid
+   placed. */
+.team-slot { display: flex; }
+.team-slot > .session-card { flex: 1; min-width: 0; }
+
+.legend { display: flex; flex-wrap: wrap; gap: 8px; padding: 0 20px 16px; }
+.leg {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 3px 10px;
+}
+.leg-line { width: 16px; border-top: 1px solid var(--line); }
+.leg-line.is-recent { border-top-color: var(--dim); border-top-width: 1.4px; }
+
+/* The address, where the card is showing one instead of a folder. */
+.session-card-where.is-addr { color: #8fa4c4; }
+
+/* ---------- the screens, as a row ---------- */
+
+.nav-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 0 16px 10px;
+}
+.nav-chip {
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+  padding: 4px 11px;
+  cursor: pointer;
+}
+.nav-chip:hover { border-color: var(--dim); color: var(--text); }
+.nav-chip.is-active {
+  border-color: var(--accent);
+  color: #cfe0ff;
+  background: #161d2b;
+}
+
+/* The team's own heading carries the button that raises one. */
+.stage-head .btn { margin-left: auto; }
+
+/* ---------- the list of teams ---------- */
+
+.team-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 14px 20px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+/*
+ * A card keeps its own height instead of being squeezed into what is left.
+ *
+ * Measured: a proposal 1365px tall sat in an 800px card with `overflow:
+ * hidden`, so the list below it had nothing to scroll — scrollHeight equalled
+ * clientHeight and the page looked complete while a third of the card, and
+ * both of its buttons, were simply cut off. A flex child shrinks by default,
+ * and a shrunk child that hides its overflow does not report it to anybody.
+ */
+.team-list > *,
+.teams > * { flex-shrink: 0; }
+.team-row-card {
+  display: flex;
+  align-items: stretch;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  overflow: hidden;
+}
+.team-row-card:hover { border-color: var(--dim); }
+/* Something in it has stopped and is waiting on you — the only thing that
+   decides which of these you open. */
+.team-row-card.is-asking { border-color: var(--waiting); }
+.team-row-open {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  background: none;
+  border: 0;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  padding: 12px 14px;
+  cursor: pointer;
+  min-width: 0;
+}
+.team-row-top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.team-row-name { font-size: 14px; font-weight: 600; }
+.team-row-top .pill {
+  font-size: 11px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 2px 8px;
+  color: var(--muted);
+}
+.team-row-top .pill.is-warn { border-color: #4a3a1c; color: var(--waiting); }
+.team-row-sub { font-size: 12px; color: var(--muted); }
+.team-row-when { font-size: 11px; color: var(--dim); }
+.team-row-card .team-dismiss { padding: 0 12px; }
+
+/* The way back from a restart, on the row itself. Centred rather than
+   stretched: it is one act on a card whose subject is the team, and a button
+   as tall as the row reads as the row. */
+.team-row-wake {
+  align-self: center;
+  flex: 0 0 auto;
+  margin-left: 10px;
+  white-space: nowrap;
+}
+
+/* The question the × asks, in the row itself: a dialog would cover the card
+   you are deciding about, and what is on that card — "5 of 6 running" — is the
+   reason the decision needs a second look at all. */
+.team-row-confirm {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  max-width: 430px;
+  padding: 10px 14px;
+  border-left: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.015);
+}
+.team-row-confirm .note { font-size: 11.5px; line-height: 1.45; }
+.team-row-confirm-acts { display: flex; gap: 6px; flex-shrink: 0; }
+
+/* Put away, and the way back. Folded and quiet: housekeeping, not the
+   subject — but on the same screen as the button that put it here. */
+.team-away { padding: 2px 0 0; }
+.team-away-toggle {
+  background: none;
+  border: 0;
+  color: var(--dim);
+  font: inherit;
+  font-size: 11.5px;
+  padding: 4px 2px;
+  cursor: pointer;
+}
+.team-away-toggle:hover { color: var(--muted); }
+.team-away-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px 0 2px 14px;
+  border-left: 1px solid var(--line);
+  margin-left: 4px;
+}
+.team-away-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 0;
+}
+.team-away-name { font-size: 12.5px; color: var(--muted); }
+.team-away-row .btn { margin-left: auto; }
+
+/* Back to the list. A heading you can leave, in a panel with no browser
+   history of its own. */
+.crumb-back {
+  background: none;
+  border: 0;
+  color: var(--dim);
+  font: inherit;
+  font-size: 12px;
+  padding: 0;
+  margin-bottom: 2px;
+  cursor: pointer;
+  display: block;
+}
+.crumb-back:hover { color: var(--text); }
+
+/* ---------- a team somebody proposed, before it is one ---------- */
+
+.team-draft {
+  background: var(--panel);
+  border: 1px solid var(--waiting);
+  border-radius: 10px;
+  /*
+   * No `overflow: hidden` here, and that is load-bearing: it would make this
+   * card its own scroll container, and a sticky header sticks to the nearest
+   * one — so the action scrolled away with the rest. The header rounds its own
+   * top corners instead of relying on the card to clip them.
+   */
+}
+.team-row-card.is-drafting { border-style: dashed; }
+.team-row-open.as-text { cursor: default; }
+.team-draft-body { padding: 14px 16px; display: flex; flex-direction: column; gap: 14px; }
+
+.draft-block { display: flex; flex-direction: column; gap: 5px; }
+.draft-block > p { margin: 0; font-size: 13px; line-height: 1.55; color: var(--muted); white-space: pre-wrap; }
+.draft-label {
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+/* The sentence a form cannot produce, and the one that is lost if a proposal
+   is treated as a button. */
+.draft-block.is-precondition {
+  background: #1a1410;
+  border: 1px solid #3a2f1d;
+  border-radius: 8px;
+  padding: 11px 13px;
+}
+.draft-block.is-precondition .draft-label { color: var(--waiting); }
+.draft-block.is-precondition > p { color: #eadfcd; }
+
+/* Not an error state: a model wrote this, and what it got wrong is a reason to
+   read it harder rather than to throw it away. */
+.draft-block.is-fault ul { margin: 0; padding-left: 18px; }
+.draft-block.is-fault li { font-size: 12.5px; color: var(--waiting); margin: 3px 0; }
+
+.draft-members { display: flex; flex-direction: column; gap: 8px; }
+.draft-member,
+.draft-role {
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 9px 11px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+}
+.draft-member.is-bad { border-color: #4a2020; }
+.draft-role { display: block; }
+.draft-why {
+  flex-basis: 100%;
+  margin: 4px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--dim);
+}
+.draft-member .pill,
+.draft-role .pill {
+  font-size: 11px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 2px 8px;
+  color: var(--muted);
+}
+.draft-member .pill.lead, .draft-role .pill.lead { border-color: #3a2f1d; color: var(--waiting); }
+.draft-role .pill.adv { border-color: #2c4c82; color: #9dbcf0; }
+.draft-member .pill.is-warn { border-color: #4a2020; color: #e2b0b0; }
+.draft-member .pill.is-done { border-color: #1d3a27; color: var(--idle); }
+/* Already started. Still here, because a plan in phases needs the half that
+   has gone to make sense of the half that has not. */
+.draft-member.is-raised { opacity: 0.6; }
+/* Folded, never hidden. The fold is clickable and says so, which is the same
+   deal the notices above the conversation make. */
+.draft-long {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  cursor: pointer;
+}
+.draft-long.is-open { display: block; overflow: visible; }
+.draft-long:hover { color: var(--text); }
+
+/* The action stays with the title, because a proposal is as long as it needs
+   to be and a button under all of it is a button nobody finds. */
+.team-head.is-sticky {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--panel);
+  border-radius: 9px 9px 0 0;
+}
+.team-head-actions { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+.team-head-actions .team-dismiss { margin-left: 0; }
+
+.draft-foot {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 0 16px 14px;
+  font-size: 12px;
+}
+
+/* ---------- one block per team ---------- */
+
+.teams {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 14px 20px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.team-block.is-bare { background: none; border: 0; }
+.team-block {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  overflow: hidden;
+}
+.team-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 11px 16px;
+  border-bottom: 1px solid var(--line);
+}
+.team-head h3 { margin: 0; font-size: 14px; font-weight: 600; }
+.team-sub { font-size: 12px; color: var(--dim); }
+.team-dismiss {
+  margin-left: auto;
+  background: none;
+  border: 0;
+  color: var(--dim);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 2px;
+}
+.team-dismiss:hover { color: var(--text); }
+
+/* A member whose session is no longer there. Plain and still present: a team
+   of four with one gone is four people, one of whom left. */
+.session-card.is-gone { opacity: 0.55; }
+.session-card-head.is-static { cursor: default; }
 .preset-editor input {
   background: var(--bg);
   border: 1px solid var(--line);
@@ -3336,74 +4161,6 @@ body {
   .perm-add select { min-height: 44px; font-size: 16px; }
 }
 
-/* ---------- map zoom ---------- */
-
-.map-canvas canvas {
-  /* The browser's own pan and pinch would fight ours for the same gesture. */
-  touch-action: none;
-}
-
-.map-zoom {
-  position: absolute;
-  right: 14px;
-  bottom: 14px;
-  z-index: 3;
-  display: flex;
-  align-items: stretch;
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  overflow: hidden;
-}
-.map-zoom button {
-  min-width: 34px;
-  padding: 0 8px;
-  background: none;
-  border: 0;
-  color: var(--muted);
-  font: inherit;
-  font-size: 14px;
-  line-height: 30px;
-  cursor: pointer;
-}
-.map-zoom button + button { border-left: 1px solid var(--line); }
-.map-zoom button:hover:not(:disabled) { color: var(--text); background: var(--panel-2); }
-.map-zoom-level {
-  min-width: 48px;
-  font-size: 11px;
-  font-variant-numeric: tabular-nums;
-}
-.map-zoom-level:disabled { color: var(--dim); cursor: default; }
-
-@media (max-width: 760px) {
-  .map-zoom { right: 10px; bottom: 10px; }
-  .map-zoom button { min-width: 44px; line-height: 40px; font-size: 17px; }
-  .map-zoom-level { min-width: 54px; font-size: 12px; }
-}
-
-/* Activity shapes in the legend, matching what the canvas draws. */
-.map-act {
-  display: inline-block;
-  width: 8px;
-  height: 8px;
-  background: var(--muted);
-}
-.map-act.is-command { border-radius: 1px; }
-.map-act.is-skill { transform: rotate(45deg); border-radius: 1px; }
-.map-act.is-agent {
-  background: none;
-  width: 0;
-  height: 0;
-  border-left: 5px solid transparent;
-  border-right: 5px solid transparent;
-  border-bottom: 9px solid var(--muted);
-}
-.map-act.is-web {
-  background: none;
-  border: 1.4px solid var(--muted);
-  border-radius: 50%;
-}
-
 /* Pairing: the link that carries the deck's key. Long, and never broken
    across a copy — a truncated token is a token that does not work. */
 .pair-link {
@@ -3709,4 +4466,485 @@ body {
   .room-turn.from-b .room-card, .room-turn.from-b .room-card-foot { text-align: left; justify-content: flex-start; }
   .room-lane.right { text-align: left; }
   .room-lane { margin-bottom: 8px; }
+}
+
+/* ───────────────────────────────────────────────────────────────────────────
+ * Plans — what each project is trying to build.
+ *
+ * Settled on a mockup first, which is where the three decisions in here were
+ * argued: one bar in two tones because progress and proof are the
+ * same measurement asked twice, collapsible plans whose default opens only
+ * what is live, and the native id first on every row because that is the
+ * string you will search the repository for.
+ * ─────────────────────────────────────────────────────────────────────────*/
+
+.pl-sub { margin: 2px 0 10px; font-size: 12px; color: var(--muted); }
+.pl-totals b.is-earned { color: var(--idle); font-weight: 600; }
+.pl-totals b.is-unver { color: var(--waiting); font-weight: 600; }
+.pl-totals b.is-ready { color: #7fc2ff; font-weight: 600; }
+
+.pl-head-right { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+.pl-method {
+  font-size: 11px; letter-spacing: .04em; text-transform: uppercase; color: var(--muted);
+  border: 1px solid var(--line); border-radius: 999px; padding: 2px 8px;
+}
+.pl-locked {
+  font-size: 11px; color: var(--dim);
+  border: 1px solid var(--line); border-radius: 4px; padding: 1px 6px;
+}
+
+/* ---------- one bar, two tones ---------- */
+.pl-bar {
+  position: relative; flex: none; width: 96px; height: 5px;
+  background: var(--panel-2); border-radius: 3px; overflow: hidden;
+}
+.pl-bar-done, .pl-bar-earned { position: absolute; left: 0; top: 0; height: 100%; }
+.pl-bar-done { background: #2b4a6f; }
+/* Drawn over the other, from the same origin: it is a part of that length,
+   not a second measurement sitting beside it. */
+.pl-bar-earned { background: var(--idle); }
+
+/* ---------- a plan ---------- */
+.pl-plan { margin: 10px 0 0; padding-top: 9px; border-top: 1px solid var(--line); }
+.pl-plan:first-of-type { border-top: 0; }
+.pl-phead { display: flex; align-items: center; gap: 9px; cursor: pointer; list-style: none; }
+.pl-phead::-webkit-details-marker { display: none; }
+.pl-caret { color: var(--dim); font-size: 10px; flex: none; transition: transform .12s; }
+.pl-plan[open] > .pl-phead .pl-caret { transform: rotate(90deg); }
+.pl-ptitle {
+  font-size: 13px; font-weight: 600; flex: 1 1 auto; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.pl-tag-ready {
+  font-size: 10px; color: #9ec9f5; background: #0f1a26;
+  border: 1px solid #23405e; border-radius: 999px; padding: 1px 7px; flex: none;
+}
+.pl-tag-blocked {
+  font-size: 10px; color: var(--critical); border: 1px solid #3a1d1d;
+  border-radius: 999px; padding: 1px 7px; flex: none;
+}
+.pl-state { font-size: 11px; color: var(--dim); flex: none; }
+.pl-state.is-in-progress { color: var(--busy); }
+.pl-state.is-done { color: var(--idle); }
+.pl-count {
+  font: 11px ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--muted); flex: none; min-width: 44px; text-align: right;
+}
+
+/* ---------- an item ---------- */
+.pl-items { list-style: none; margin: 8px 0 0; padding: 0; }
+.pl-it {
+  display: flex; align-items: center; gap: 9px; padding: 5px 8px;
+  border-radius: 5px; font-size: 12px; border: 1px solid transparent;
+}
+.pl-it:hover { background: var(--panel-2); }
+.pl-it.is-ready { background: #0f1a26; border-color: #1d3450; }
+.pl-it.is-blocked { background: #1a1113; }
+.pl-dot { width: 6px; height: 6px; border-radius: 50%; flex: none; background: #39414f; }
+.pl-dot.is-done { background: var(--idle); }
+.pl-dot.is-doing { background: var(--busy); }
+.pl-dot.is-blocked { background: var(--critical); }
+.pl-dot.is-ready { background: #7fc2ff; box-shadow: 0 0 0 3px #1d345077; }
+.pl-id {
+  font: 11px ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--muted); flex: none; min-width: 96px;
+}
+.pl-it.is-ready .pl-id { color: #cfe6ff; }
+.pl-ttl {
+  color: var(--text); flex: 1 1 auto; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.pl-it.is-done .pl-ttl { color: var(--muted); }
+/* Which plan an item belongs to. Only on the global list, where the rows come
+   from eleven plans at once and the title alone places nothing. */
+.pl-inplan {
+  font-size: 10px; color: var(--dim); flex: none; max-width: 190px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  border-left: 1px solid var(--line); padding-left: 8px;
+}
+.pl-est { font: 10px ui-monospace, Menlo, monospace; color: var(--dim); flex: none; }
+
+.pl-proof { font-size: 10px; border-radius: 3px; padding: 1px 6px; flex: none; }
+.pl-proof.is-earned { color: var(--idle); background: #10261a; border: 1px solid #1d3a27; }
+.pl-proof.is-declared { color: var(--dim); border: 1px solid var(--line); }
+.pl-proof.is-doing { color: var(--busy); border: 1px solid #1d2d47; }
+.pl-proof.is-ready { color: #9ec9f5; border: 1px solid #23405e; }
+.pl-waits {
+  font-size: 10px; color: var(--dim); border: 1px solid var(--line);
+  border-radius: 3px; padding: 1px 6px; flex: none;
+}
+.pl-flag {
+  font-size: 10px; color: var(--waiting); border: 1px solid #3a2f1d;
+  border-radius: 3px; padding: 1px 5px; flex: none;
+}
+
+.pl-done { margin: 4px 0 0; }
+.pl-done > summary { cursor: pointer; color: var(--dim); font-size: 11px; padding: 3px 8px; }
+
+/* ---------- drift ---------- */
+.pl-drift {
+  margin: 10px 0 0; background: #1a1410; border: 1px solid #3a2f1d;
+  border-radius: 6px; padding: 8px 12px;
+}
+.pl-drift > summary { cursor: pointer; color: var(--waiting); font-size: 12px; }
+.pl-drift ul { margin: 8px 0 0; padding-left: 18px; color: var(--muted); font-size: 12px; }
+.pl-drift li { margin: 3px 0; }
+.pl-when { color: var(--dim); margin-left: 8px; font-size: 11px; }
+
+.pl-evidence { margin: 8px 0 0; padding-left: 18px; color: var(--muted); font-size: 12px; }
+.pl-evidence li { margin: 3px 0; }
+
+/* ---------- the global list of projects ---------- */
+.pl-row {
+  display: flex; align-items: center; gap: 12px; padding: 9px 12px;
+  background: var(--panel); border: 1px solid var(--line);
+  border-radius: 6px; margin-bottom: 5px;
+}
+.pl-row.is-unread { background: var(--bg); }
+.pl-row-name {
+  font: inherit; font-size: 13px; font-weight: 600; color: var(--text);
+  background: none; border: 0; padding: 0; cursor: pointer;
+  flex: none; min-width: 190px; text-align: left;
+}
+.pl-row-name:hover { color: var(--accent); }
+.pl-row-meta { font-size: 12px; color: var(--muted); flex: 1 1 auto; }
+.pl-row-meta .is-earned { color: var(--idle); }
+.pl-row-meta .is-unver { color: var(--waiting); }
+.pl-row-right { display: flex; align-items: center; gap: 10px; font-size: 12px; flex: none; }
+.pl-row-right .is-ready { color: #7fc2ff; }
+.pl-row-right .is-quiet { color: var(--dim); }
+
+/* ---------- putting a plan aside ----------
+ *
+ * The × is quiet until you are on the row: a destructive-looking control on
+ * every line of a board makes the board feel dangerous, and this one is not —
+ * it filters a view and nothing else. The way back is never quiet, which is
+ * the asymmetry that keeps the screen honest.
+ */
+.pl-hide {
+  font: inherit; font-size: 14px; line-height: 1;
+  color: var(--dim); background: none; border: 0;
+  padding: 0 2px; cursor: pointer; flex: none;
+  opacity: 0; transition: opacity .12s, color .12s;
+}
+.pl-phead:hover .pl-hide,
+.pl-hide:focus-visible { opacity: 1; }
+.pl-hide:hover { color: var(--text); }
+
+.pl-hidden-note {
+  display: flex; align-items: center; gap: 8px;
+  margin: 8px 0 2px; font-size: 12px; color: var(--muted);
+}
+
+.pl-link {
+  font: inherit; font-size: 12px; color: var(--accent);
+  background: none; border: 0; padding: 0; cursor: pointer;
+  text-decoration: underline; text-underline-offset: 2px;
+}
+.pl-link:hover { color: #7fc2ff; }
+
+/* ---------- the plans board scrolls ----------
+ *
+ * `.stage` is `overflow: hidden` and delegates scrolling to one child, which
+ * is what `.transcript` and the old `.roadmap` both were. Rendering the board
+ * as a bare flex child inherited neither, so a project with sixty-six plans
+ * drew all of them and let you reach none.
+ */
+.pl-scroll { flex: 1; overflow-y: auto; padding: 20px; min-height: 0; }
+
+/* ---------- plans grouped by state ---------- */
+.pl-group { border-top: 1px solid var(--line); }
+.pl-group:first-of-type { border-top: 0; }
+.pl-ghead {
+  display: flex; align-items: center; gap: 8px;
+  padding: 9px 0 8px; cursor: pointer; list-style: none;
+}
+.pl-ghead::-webkit-details-marker { display: none; }
+.pl-glabel {
+  font-size: 11px; font-weight: 600; letter-spacing: .06em;
+  text-transform: uppercase; color: var(--muted);
+}
+.pl-gcount {
+  font: 11px ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--dim); background: var(--panel-2);
+  border: 1px solid var(--line); border-radius: 999px; padding: 0 7px;
+}
+/* Indented, so the folder it belongs to is readable at a glance down the
+   left edge rather than from the heading alone. */
+.pl-gbody { padding-left: 14px; border-left: 1px solid var(--line); margin-left: 4px; }
+.pl-group[open] > .pl-ghead .pl-caret { transform: rotate(90deg); }
+
+/* ---------- what was put aside ---------- */
+.pl-hidden-note { margin: 8px 0 2px; font-size: 12px; color: var(--muted); }
+.pl-hidden-note > summary {
+  display: flex; align-items: center; gap: 8px;
+  cursor: pointer; list-style: none;
+}
+.pl-hidden-note > summary::-webkit-details-marker { display: none; }
+.pl-hidden-note[open] > summary .pl-caret { transform: rotate(90deg); }
+.pl-hidden-list { list-style: none; margin: 6px 0 0; padding: 0 0 0 14px; }
+.pl-hidden-list li {
+  display: flex; align-items: center; gap: 10px;
+  padding: 3px 0; font-size: 12px;
+}
+.pl-hidden-title {
+  color: var(--dim); flex: 1 1 auto; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+/* ── Handoff: the header button, the "ready" card, the launcher list ── */
+
+/* Warm before ContextMeter is: the note wants the detail compaction removes. */
+.ctl-handoff.is-warm { border-color: rgba(240, 168, 60, 0.45); color: #ffd99a; }
+.ctl-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--waiting); flex: none; }
+
+.handoff-ready {
+  margin: 0 16px 8px;
+  padding: 10px 12px;
+  border: 1px solid rgba(63, 185, 80, 0.35);
+  background: rgba(63, 185, 80, 0.07);
+  border-radius: var(--radius);
+}
+.handoff-ready-head {
+  font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--idle);
+}
+.handoff-ready-path {
+  margin: 3px 0 8px; font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.handoff-ready-row { display: flex; gap: 8px; flex-wrap: wrap; }
+
+.handoffs { margin-bottom: 16px; }
+.handoff-item {
+  display: flex; align-items: center; gap: 10px; width: 100%;
+  margin: 0 0 6px; padding: 8px 10px; text-align: left;
+  background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+  color: var(--text); font: inherit; cursor: pointer;
+}
+.handoff-item:hover { border-color: #3a4150; }
+.handoff-item.is-on { border-color: var(--accent); background: rgba(76, 141, 255, 0.08); }
+.handoff-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.handoff-title { font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.handoff-meta {
+  font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--dim);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.handoff-warn { font-size: 11.5px; color: var(--waiting); }
+.handoff-age { flex: none; font-size: 11.5px; color: var(--muted); }
+.handoff-state { flex: none; font-size: 10.5px; border-radius: 999px; padding: 1px 8px; }
+.handoff-state.is-pending { background: rgba(240, 168, 60, 0.14); color: #ffd99a; }
+.handoff-state.is-picked-up,
+.handoff-state.is-superseded { background: var(--panel-2); color: var(--dim); }
+.handoff-older { margin-top: 2px; }
+.modal-where-why { color: var(--waiting); }
+
+@media (max-width: 640px) {
+  .handoff-age { display: none; }
+}
+
+/* ---------- the live subagent count beside the Agents tab ---------- */
+.live-agents { display: inline-flex; align-items: center; }
+/* The other `.seg` (further up) clips its corners with overflow: hidden, and
+   the header's tabs inherit it. Nothing in here needs clipping — the buttons
+   are pills inside 2px of padding — and the list has to hang below. */
+.stage-views .seg { overflow: visible; position: relative; }
+.seg .live-count {
+  flex: none;
+  margin-left: 2px;
+  min-width: 22px;
+  padding: 1px 7px;
+  font: 600 11px ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: #9cc0ff;
+  background: rgba(76, 141, 255, 0.16);
+  border-radius: 999px;
+}
+.seg .live-count:hover,
+.seg .live-count.is-open { color: #fff; background: rgba(76, 141, 255, 0.32); }
+.live-pop {
+  position: absolute;
+  /* Hung from the tabs' left edge, not the count's right one: the count sits
+     at the end of the tabs, and a list growing leftwards from there runs
+     into the sidebar on a laptop screen. */
+  top: calc(100% + 8px);
+  left: 0;
+  z-index: 40;
+  width: min(420px, calc(100vw - 24px));
+  background: var(--panel);
+  border: 1px solid #303643;
+  border-radius: 10px;
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.55);
+  overflow: hidden;
+  text-align: left;
+}
+.live-pop header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--line);
+  font-size: 12px;
+  color: var(--muted);
+}
+.live-agents .live-pop .live-pop-all {
+  flex: none;
+  min-height: 0;
+  border-radius: 0;
+  font-size: 12px;
+  margin-left: auto;
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  color: var(--accent);
+  cursor: pointer;
+}
+.live-pop ul { list-style: none; margin: 0; padding: 4px 0; max-height: min(320px, 60vh); overflow-y: auto; }
+.live-agents .live-pop li button {
+  min-height: 0;
+  border-radius: 0;
+  flex: none;
+  font-size: inherit;
+  display: grid;
+  grid-template-columns: 7px minmax(0, 1fr);
+  gap: 3px 10px;
+  width: 100%;
+  padding: 8px 12px;
+  background: none;
+  border: 0;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+.live-agents .live-pop li button:hover { background: var(--panel-2); }
+.live-pop li .dot { margin-top: 7px; }
+.live-desc { font-size: 13px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.live-meta {
+  grid-column: 2;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 9px;
+  font: 11.5px ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--dim);
+}
+.live-type { color: #c3cad6; }
+.live-summary {
+  grid-column: 2;
+  font-size: 12px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+@media (max-width: 760px) {
+  .stage-views .seg .live-count { flex: none; min-height: 0; padding: 1px 9px; }
+}
+.live-folded {
+  min-width: 18px;
+  padding: 0 6px;
+  border-radius: 999px;
+  font: 600 11px/18px ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: #9cc0ff;
+  background: rgba(76, 141, 255, 0.16);
+  text-align: center;
+}
+@media (max-width: 760px) {
+  .stage-more:has(.live-folded) { width: auto; gap: 5px; padding: 0 6px; }
+}
+
+/* ---------- files: the project's tree, read-only (design/archivos-v1.html) ---------- */
+
+.fx { flex: 1; min-height: 0; display: flex; position: relative; overflow: hidden; }
+.fx-tree {
+  flex: none; width: 300px; min-width: 200px; max-width: 60%;
+  display: flex; flex-direction: column;
+  background: var(--panel); border-right: 1px solid var(--line);
+  /* Wider by dragging its edge, like the explorer's sash. */
+  resize: horizontal; overflow: hidden;
+}
+.fx-tbar { flex: none; display: flex; align-items: center; gap: 2px; padding: 8px 8px 6px 12px; }
+.fx-root {
+  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted);
+}
+.fx-ibtn {
+  width: 26px; height: 26px; display: grid; place-items: center;
+  border: 0; background: none; color: var(--muted); border-radius: 5px; cursor: pointer;
+}
+.fx-ibtn:hover { background: var(--panel-2); color: var(--text); }
+.fx-ibtn.is-on { color: var(--accent); }
+.fx-ibtn svg { width: 15px; height: 15px; }
+.fx-filter {
+  flex: none; margin: 0 8px 6px; display: flex; align-items: center; gap: 6px;
+  background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px;
+}
+.fx-filter:focus-within { border-color: var(--accent); }
+.fx-filter input { flex: 1; min-width: 0; background: none; border: 0; outline: 0; color: var(--text); font: inherit; font-size: 12.5px; }
+.fx-filter svg { width: 13px; height: 13px; color: var(--dim); flex: none; }
+
+.fx-rows { flex: 1; overflow: auto; padding: 2px 0 12px; font-size: 13px; outline: none; }
+.fx-row {
+  position: relative; display: flex; align-items: center; gap: 6px;
+  height: 24px; padding-right: 10px; white-space: nowrap; cursor: pointer;
+  border: 1px solid transparent;
+}
+.fx-row:hover { background: var(--panel-2); }
+.fx-row.is-sel { background: #13243b; }
+.fx-rows:focus .fx-row.is-sel { border-color: #23405e; }
+.fx-chev { width: 16px; height: 16px; flex: none; display: grid; place-items: center; color: var(--dim); transition: transform 0.12s; }
+.fx-chev svg { width: 12px; height: 12px; }
+.fx-row.is-open > .fx-chev { transform: rotate(90deg); }
+.fx-ico { width: 16px; height: 16px; flex: none; }
+.fx-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.fx-name mark { background: #4c8dff44; color: inherit; border-radius: 2px; }
+/* The explorer's colours for git, so a glance reads the same in both. */
+.fx-row.st-M .fx-name, .fx-row.st-R .fx-name, .fx-row.has-changes .fx-name { color: #e2c08d; }
+.fx-row.st-U .fx-name, .fx-row.st-A .fx-name { color: #73c991; }
+.fx-row.st-D .fx-name { color: #e5807a; text-decoration: line-through; }
+.fx-row.is-ignored .fx-name, .fx-row.is-ignored .fx-ico { opacity: 0.45; }
+.fx-gs { flex: none; width: 12px; text-align: center; font: 600 11px ui-monospace, Menlo, monospace; }
+.fx-gs.M, .fx-gs.R { color: #e2c08d; }
+.fx-gs.U, .fx-gs.A { color: #73c991; }
+.fx-gs.D { color: #e5807a; }
+.fx-gdot { flex: none; width: 6px; height: 6px; border-radius: 50%; background: #e2c08d; opacity: 0.8; margin-right: 3px; }
+.fx-guide { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--line); }
+.fx-note { position: relative; color: var(--dim); font-size: 12px; font-style: italic; padding: 3px 10px 3px 16px; }
+
+.fx-preview { flex: 1; min-width: 0; display: flex; flex-direction: column; background: var(--bg); }
+.fx-pbar {
+  flex: none; display: flex; align-items: center; gap: 8px; min-height: 41px;
+  padding: 6px 14px; border-bottom: 1px solid var(--line);
+}
+.fx-path {
+  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font: 12px ui-monospace, Menlo, monospace; color: var(--muted);
+}
+.fx-path b { color: var(--text); font-weight: 600; }
+.fx-pill { flex: none; font-size: 11px; border: 1px solid var(--line); border-radius: 999px; padding: 1px 8px; color: var(--muted); }
+.fx-pill.M, .fx-pill.R { color: #e2c08d; border-color: #3a2f1d; }
+.fx-pill.U, .fx-pill.A { color: #73c991; border-color: #1d3a27; }
+.fx-pill.D { color: #e5807a; border-color: #4a2222; }
+.fx-pbar a.btn { text-decoration: none; }
+.fx-back { display: none; }
+.fx-code { flex: 1; overflow: auto; display: flex; align-items: flex-start; font: 12.5px/1.6 ui-monospace, Menlo, monospace; padding: 8px 0; }
+.fx-gutter { flex: none; position: sticky; left: 0; background: var(--bg); min-width: 48px; padding-right: 14px; text-align: right; color: #3d4554; user-select: none; }
+.fx-text { margin: 0; padding-right: 16px; font: inherit; color: #c9d1dc; white-space: pre; tab-size: 2; }
+.fx-empty { flex: 1; display: grid; place-items: center; padding: 24px; text-align: center; color: var(--dim); font-size: 13px; }
+.fx-empty b { display: block; margin-bottom: 4px; color: var(--muted); font-weight: 600; }
+
+/* A phone: the tree is the page, and a file opens over it. */
+@media (max-width: 760px) {
+  /* The session header folds its tabs away behind a button; the project and
+     settings headers have no such button, so folding them only lost the tabs. */
+  .stage-head .seg.seg-tabs { display: inline-flex; margin-left: 0; }
+  .fx-tree { width: 100% !important; max-width: none; border-right: 0; resize: none; }
+  .fx-row { height: 34px; }
+  .fx-preview { position: absolute; inset: 0; z-index: 2; transform: translateX(100%); transition: transform 0.18s ease; }
+  .fx.show-preview .fx-preview { transform: none; }
+  .fx-back { display: inline-flex; }
+  .fx-wide { display: none; }
+  .fx-pbar { padding: 6px 10px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .fx-preview, .fx-chev { transition: none; }
 }

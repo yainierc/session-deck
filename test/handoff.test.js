@@ -193,3 +193,84 @@ test('a turn in flight is given the chance to finish before the deck goes', asyn
   await suspending
   assert.equal(agents.list()[0].status, 'detached')
 })
+
+test('how a session was asked to think survives the restart too', () => {
+  handoff.remember([{
+    deckId: 'h1',
+    sessionId: 'think-me',
+    cwd: scratch,
+    status: 'working',
+    title: 'backend',
+    model: 'sonnet',
+    /*
+     * The asked-for values, because there are no others: a session reports
+     * back neither its effort nor its advisor, so there is no granted version
+     * to prefer. Without these, waking one after a restart would start a
+     * cheaper session wearing its name, and nothing on screen would say so.
+     */
+    requestedEffort: 'xhigh',
+    requestedAdvisor: 'opus',
+  }])
+
+  const [record] = handoff.read().filter((r) => r.sessionId === 'think-me')
+  assert.equal(record.model, 'sonnet')
+  assert.equal(record.effort, 'xhigh')
+  assert.equal(record.advisor, 'opus')
+})
+
+/**
+ * The progress list across a restart.
+ *
+ * The session does not know the deck went down, so it will not re-send its
+ * plan unasked: this file is the only thing that can put the strip back the
+ * way it was. And it is a file, so it is also the place a bad shape can enter
+ * from — which is why the round trip is asserted in both directions.
+ */
+test('the progress list survives the restart that the session slept through', () => {
+  handoff.remember([
+    {
+      deckId: 'p1',
+      sessionId: 's-progress',
+      cwd: scratch,
+      title: 'mid-task',
+      status: 'working',
+      todos: [
+        { text: 'Mapped the service', status: 'completed' },
+        { text: 'Writing the tool', status: 'in_progress' },
+        { text: 'Draw the strip', status: 'pending' },
+      ],
+    },
+  ])
+
+  const [record] = handoff.read().filter((r) => r.deckId === 'p1')
+  assert.deepEqual(record.todos, [
+    { text: 'Mapped the service', status: 'completed' },
+    { text: 'Writing the tool', status: 'in_progress' },
+    { text: 'Draw the strip', status: 'pending' },
+  ])
+})
+
+test('a record from an older deck, with no list, reads as an empty one', () => {
+  // Every record written before this feature existed looks like this. None of
+  // them may come back as `undefined`, which the strip would try to render.
+  handoff.remember([
+    { deckId: 'p2', sessionId: 's-old', cwd: scratch, title: 'older', status: 'idle' },
+  ])
+  const [record] = handoff.read().filter((r) => r.deckId === 'p2')
+  assert.deepEqual(record.todos, [])
+})
+
+test('a hand-edited file cannot put nonsense on the screen', () => {
+  handoff.remember([
+    {
+      deckId: 'p3',
+      sessionId: 's-junk',
+      cwd: scratch,
+      title: 'junk',
+      status: 'idle',
+      todos: [{ text: 'Real step', status: 'completed' }, 'not an object', { status: 'pending' }],
+    },
+  ])
+  const [record] = handoff.read().filter((r) => r.deckId === 'p3')
+  assert.deepEqual(record.todos, [{ text: 'Real step', status: 'completed' }])
+})

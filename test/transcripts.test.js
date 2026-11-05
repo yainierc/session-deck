@@ -12,7 +12,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { readTranscript, tailTranscript } from '../src/transcripts.js'
+import { readTranscript, tailTranscript, normalizeLine } from '../src/transcripts.js'
 
 const ASSISTANT_TOOL = {
   type: 'assistant',
@@ -128,4 +128,110 @@ test('a file sent with no words is still a message in the panel', () => {
   const { messages } = readTranscript(write([only]))
   assert.equal(messages.length, 1, 'not swallowed as activity')
   assert.equal(messages[0].text, '[spec.md]')
+})
+
+/* ---------------------------------------------------------------------------
+ * How the session was actually thinking.
+ *
+ * Neither the effort nor the advisor arrives on the session's startup message,
+ * so the panel could set a level and never confirm one, and had no way at all
+ * to know whether an advisor was attached. A pairing the API refuses is
+ * refused in silence — the request is simply not applied — so a session with
+ * no advisor is indistinguishable from one with a good one. Every turn is
+ * written down with both, which makes the transcript the only witness.
+ * ------------------------------------------------------------------------ */
+
+const turn = (uuid, extra) => ({
+  type: 'assistant',
+  uuid,
+  timestamp: '2026-09-14T20:32:00.000Z',
+  message: { content: [{ type: 'text', text: 'ok' }] },
+  ...extra,
+})
+
+test('a whole read reports the effort and the advisor of the newest turn', () => {
+  const file = write([turn('g1', { effort: 'low', advisorModel: 'claude-opus-5' })])
+  assert.deepEqual(readTranscript(file).granted, { effort: 'low', advisor: 'claude-opus-5' })
+})
+
+test('an advisor that went away is not remembered from an older turn', () => {
+  /*
+   * The whole point. Merging across turns would keep reporting the advisor
+   * from the turn it was last seen on, which is the same failure as the chip
+   * showing a request instead of an outcome — arrived at from the other side.
+   */
+  const file = write([
+    turn('g1', { effort: 'high', advisorModel: 'claude-opus-5' }),
+    turn('g2', { effort: 'high' }),
+  ])
+  assert.deepEqual(readTranscript(file).granted, { effort: 'high', advisor: null })
+})
+
+test('a session that has not spoken has not said', () => {
+  // Not `{ effort: null, advisor: null }`, which would be a claim. A whole-file
+  // read of a transcript with no assistant turn in it knows nothing either way.
+  const file = write([FAILED_RESULT])
+  assert.equal(readTranscript(file).granted, null)
+})
+
+test('a live batch with no turn in it says nothing about the advisor', async () => {
+  const file = write([ASSISTANT_TOOL])
+  const tail = tailTranscript(file, { fromSize: fs.statSync(file).size, intervalMs: 20 })
+
+  const seen = []
+  tail.on('update', (update) => seen.push(update))
+
+  // A user line: news for the conversation, nothing about how it is thinking.
+  fs.appendFileSync(file, JSON.stringify(FAILED_RESULT) + '\n')
+  await new Promise((r) => setTimeout(r, 80))
+
+  // Then a turn, which does say.
+  fs.appendFileSync(file, JSON.stringify(turn('g9', { effort: 'max' })) + '\n')
+  await new Promise((r) => setTimeout(r, 80))
+  tail.stop()
+
+  assert.ok(seen.length >= 2, 'both batches were delivered')
+  assert.equal('granted' in seen[0] && seen[0].granted !== undefined, false,
+    'the first batch had no turn in it, so it claims nothing')
+  assert.deepEqual(seen.at(-1).granted, { effort: 'max', advisor: null })
+})
+
+
+/**
+ * The panel's own tool, kept out of the panel.
+ *
+ * A session ticking off its progress list is not doing a piece of work worth
+ * announcing: the list it just wrote is already on screen. Left alone, the
+ * activity line would read "working mcp__panel__progress" — the panel
+ * reporting its own plumbing back to the person watching it.
+ */
+function assistantCalling(...tools) {
+  return {
+    type: 'assistant',
+    uuid: 'u1',
+    timestamp: '2026-10-13T10:00:00.000Z',
+    message: {
+      role: 'assistant',
+      content: tools.map((name) => ({ type: 'tool_use', id: `t-${name}`, name, input: {} })),
+    },
+  }
+}
+
+test('ticking the progress list is not an activity worth showing', () => {
+  assert.equal(normalizeLine(assistantCalling('mcp__panel__progress')), null)
+})
+
+test('a turn that ticks a box and starts a build still says it is building', () => {
+  // Tools are called in parallel, so the progress call is skipped rather than
+  // the search stopping at the first block — otherwise the one visible piece
+  // of work in the message would be lost behind the bookkeeping.
+  const line = normalizeLine(assistantCalling('mcp__panel__progress', 'Bash'))
+  assert.equal(line.role, '_activity')
+  assert.equal(line.tool, 'Bash')
+})
+
+test('an ordinary tool call is untouched', () => {
+  const line = normalizeLine(assistantCalling('Read'))
+  assert.equal(line.role, '_activity')
+  assert.equal(line.tool, 'Read')
 })

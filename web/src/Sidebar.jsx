@@ -11,8 +11,8 @@ function StatusDot({ status }) {
 /**
  * The part of a session's name it inherited from its folder.
  *
- * The deck derives a name like `github-platform-25` from the project it runs
- * in, so inside `GITHUB-Platform` the first seventeen characters of every
+ * The deck derives a name like `github-acmeplatform-25` from the project it runs
+ * in, so inside `GITHUB-AcmePlatform` the first twenty characters of every
  * session say what the heading above them already said. Four sessions like
  * that are four rows that start identically and differ in the last two
  * characters — which is exactly where the eye is not looking.
@@ -22,20 +22,32 @@ function StatusDot({ status }) {
  * recognise if this list is ever seen without its heading. A session you
  * named yourself has nothing to inherit and is left exactly as you wrote it.
  */
-function splitInherited(projectName, sessionName) {
-  if (!projectName || !sessionName) return null
-  const slug = projectName.toLowerCase().replace(/[^a-z0-9]+/g, '-')
-  if (slug.length < 3) return null
-  const prefix = `${slug}-`
-  if (!sessionName.toLowerCase().startsWith(prefix)) return null
-  const rest = sessionName.slice(prefix.length)
-  // A name that is *only* the prefix has nothing left to distinguish it, and
-  // dimming the whole row would be worse than leaving it alone.
-  return rest ? { inherited: sessionName.slice(0, prefix.length), rest } : null
+function splitInherited(projectNames, sessionName) {
+  if (!sessionName) return null
+  /*
+   * Several names to try, because the heading and the folder can now differ.
+   * A session is named after the *folder* it runs in, so a project you have
+   * renamed to `Accounting` still has sessions called `ledger-api-25` — and
+   * those are exactly the ones where the prefix is redundant with the path
+   * line underneath. Checking both keeps the dimming working through a rename
+   * instead of quietly switching itself off.
+   */
+  for (const projectName of projectNames) {
+    if (!projectName) continue
+    const slug = projectName.toLowerCase().replace(/[^a-z0-9]+/g, '-')
+    if (slug.length < 3) continue
+    const prefix = `${slug}-`
+    if (!sessionName.toLowerCase().startsWith(prefix)) continue
+    const rest = sessionName.slice(prefix.length)
+    // A name that is *only* the prefix has nothing left to distinguish it, and
+    // dimming the whole row would be worse than leaving it alone.
+    if (rest) return { inherited: sessionName.slice(0, prefix.length), rest }
+  }
+  return null
 }
 
-function SessionName({ session, projectName }) {
-  const split = splitInherited(projectName, session.name)
+function SessionName({ session, projectNames }) {
+  const split = splitInherited(projectNames, session.name)
   if (!split) return <span className="session-name">{session.name}</span>
   return (
     <span className="session-name" title={session.name}>
@@ -45,7 +57,7 @@ function SessionName({ session, projectName }) {
   )
 }
 
-function SessionRow({ session, projectName, active, onSelect }) {
+function SessionRow({ session, projectNames, active, onSelect }) {
   const waiting = session.status === 'waiting'
   const where = describeSubpath(session)
   return (
@@ -56,7 +68,7 @@ function SessionRow({ session, projectName, active, onSelect }) {
     >
       <span className="session-line">
         <StatusDot status={session.status} />
-        <SessionName session={session} projectName={projectName} />
+        <SessionName session={session} projectNames={projectNames} />
         {session.managed && <span className="tag" title="Launched from the deck">deck</span>}
         <span className="session-meta">
           {waiting ? (session.waitingFor || 'needs you') : STATUS_LABEL[session.status] || session.status}
@@ -118,6 +130,47 @@ function DefaultPermissions() {
 }
 
 /**
+ * Renaming a project in place.
+ *
+ * In place rather than in a dialog because the name is being judged against
+ * its neighbours: `web` is only a bad heading next to the other three `web`s,
+ * and a modal covers exactly the list you are trying to fix. Typing it in the
+ * row means you see the result where it will live, at the width it will have.
+ *
+ * Enter saves, Escape abandons, and clicking away saves too — the field looks
+ * like a text input in a menu, and losing a rename because the mouse moved
+ * would be surprising in a way that losing a half-typed search is not.
+ *
+ * Clearing the field is the documented way back: it drops the label and the
+ * folder's own name returns. The placeholder says so by being that name, so
+ * an empty field is never a blank row — it is a preview of what emptying it
+ * gets you.
+ */
+function ProjectNameEditor({ project, onCommit, onCancel }) {
+  const [value, setValue] = useState(project.label || '')
+
+  return (
+    <form
+      className="project-rename"
+      onSubmit={(e) => { e.preventDefault(); onCommit(value) }}
+    >
+      <input
+        autoFocus
+        value={value}
+        placeholder={project.folderName || project.name}
+        aria-label={`Name for ${project.name}`}
+        maxLength={60}
+        onChange={(e) => setValue(e.target.value)}
+        onBlur={() => onCommit(value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Escape') { e.preventDefault(); onCancel() }
+        }}
+      />
+    </form>
+  )
+}
+
+/**
  * Everything a project can have done to it, in one menu.
  *
  * The heading used to carry four controls — fold, up, down, new task, stop
@@ -140,7 +193,7 @@ const DOTS = (
   </svg>
 )
 
-function ProjectMenu({ project, canUp, canDown, onNewTask, onMove, onRemove }) {
+function ProjectMenu({ project, canUp, canDown, onNewTask, onMove, onRemove, onRename }) {
   return (
     <Menu
       label={DOTS}
@@ -153,6 +206,9 @@ function ProjectMenu({ project, canUp, canDown, onNewTask, onMove, onRemove }) {
           <>
             <button role="menuitem" onClick={() => run(() => onNewTask(project.path))}>
               New task
+            </button>
+            <button role="menuitem" onClick={() => run(() => onRename(project.path))}>
+              {project.label ? 'Rename' : 'Rename\u2026'}
             </button>
             <button role="menuitem" disabled={!canUp} onClick={() => run(() => onMove(project.path, 'up'))}>
               Move up
@@ -180,12 +236,16 @@ function ProjectMenu({ project, canUp, canDown, onNewTask, onMove, onRemove }) {
 export default function Sidebar({
   projects, selectedSession, selectedProject, onSelectSession, onSelectProject,
   connected, onNewTask, onBrowseFolders, onRemoveFolder, onMoveProject, onOpenInbox, inboxActive,
-  onOpenSettings, settingsActive, onOpenAtlas, atlasActive, onOpenRoom, roomActive,
-  open, onClose,
+  onOpenSettings, settingsActive, onOpenRoom, roomActive, onOpenPlans, plansActive,
+  onOpenPickUp, pickUpActive,
+  onRenameProject, onOpenTeam, teamActive, open, onClose,
 }) {
   const waitingTotal = projects.reduce((sum, p) => sum + p.waiting, 0)
   const sessionTotal = projects.reduce((sum, p) => sum + p.sessions.length, 0)
   const { collapsed, toggle } = useCollapsed(projects)
+  // One at a time, by path: a rename is a thing you are doing to one heading,
+  // and the path survives the redraw that saving the name causes.
+  const [renaming, setRenaming] = useState(null)
 
   /*
    * Only saved folders have a place in the order, so only they can be moved
@@ -221,38 +281,75 @@ export default function Sidebar({
       </button>
 
       {/*
-        Only offered when there is more than one session to compare: a
-        deck-wide view of a deck with one agent in it is the session view
-        with extra steps.
+        The screens, as a row rather than a stack.
+        
+        Every one of these used to be a button the full width of the menu, and
+        there were four of them: between the one thing that needs you and the
+        projects you came to look at sat four rows of chrome. They are all
+        one word, they are all the same kind of thing, and a word does not need
+        240px to be legible. What stays full width is the queue above, which is
+        the only one carrying a number that changes.
       */}
-      {sessionTotal > 1 && (
+      <nav className="nav-chips" aria-label="Screens">
+        {sessionTotal > 0 && (
+          <button
+            className={`nav-chip ${teamActive ? 'is-active' : ''}`}
+            onClick={onOpenTeam}
+            title="Who is working, who hands out the work, and who has talked to whom"
+          >
+            Team
+          </button>
+        )}
+
+        {/*
+          Always offered, unlike the other two, because a room outlives its
+          sessions: the conversation two agents had yesterday is still worth
+          reading after both have exited, and gating this on what is running
+          now would hide exactly that.
+        */}
+        {/*
+          Always offered, like the room and for the same reason: a plan
+          outlives the sessions that worked on it, and gating this on what is
+          running would hide the project you have not started yet — which is
+          the one this screen is best at answering for.
+        */}
         <button
-          className={`inbox-link ${atlasActive ? 'is-active' : ''}`}
-          onClick={onOpenAtlas}
-          title="Every running session and what it is touching"
+          className={`nav-chip ${plansActive ? 'is-active' : ''}`}
+          onClick={onOpenPlans}
+          title="What each project is trying to build, and what can be started today"
         >
-          All agents
-          <span className="badge badge-quiet">{sessionTotal}</span>
+          Plans
         </button>
-      )}
 
-      {/*
-        Always offered, unlike the atlas, because a room outlives its
-        sessions: the conversation two agents had yesterday is still worth
-        reading after both have exited, and gating this on what is running
-        now would hide exactly that.
-      */}
-      <button
-        className={`inbox-link ${roomActive ? 'is-active' : ''}`}
-        onClick={onOpenRoom}
-        title="What your sessions have said to each other"
-      >
-        Room
-      </button>
+        {/*
+          Beside Plans, because it reads the same files and answers the other
+          question about them: not what the project is building, but where you
+          stopped — which is what you need after a blocker pulled you away and
+          you came back a fortnight later.
+        */}
+        <button
+          className={`nav-chip ${pickUpActive ? 'is-active' : ''}`}
+          onClick={onOpenPickUp}
+          title="Where you left off on each plan in progress, and what can be started now"
+        >
+          Pick up
+        </button>
 
-      <button className={`inbox-link ${settingsActive ? 'is-active' : ''}`} onClick={onOpenSettings}>
-        Settings
-      </button>
+        <button
+          className={`nav-chip ${roomActive ? 'is-active' : ''}`}
+          onClick={onOpenRoom}
+          title="What your sessions have said to each other"
+        >
+          Room
+        </button>
+
+        <button
+          className={`nav-chip ${settingsActive ? 'is-active' : ''}`}
+          onClick={onOpenSettings}
+        >
+          Settings
+        </button>
+      </nav>
 
       {waitingTotal > 0 && (
         <div className="alert">
@@ -306,19 +403,34 @@ export default function Sidebar({
                     <path d="M3 1.5 L7 5 L3 8.5" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
                   </svg>
                 </button>
-                <button
-                  className="project-name"
-                  onClick={() => onSelectProject(project.path)}
-                  title={project.path}
-                >
-                  <span className="project-label">{project.name}</span>
-                  {!project.saved && <span className="ghost-tag" title="The deck is running a task here, but the folder is not in your workspace">live</span>}
-                  {!project.exists && <span className="ghost-tag is-stale">missing</span>}
-                  {/* Folded away, the count is the only clue to what is in there. */}
-                  {isShut && project.sessions.length > 0 && (
-                    <span className="folded-count">{project.sessions.length}</span>
-                  )}
-                </button>
+                {renaming === project.path ? (
+                  <ProjectNameEditor
+                    project={project}
+                    onCancel={() => setRenaming(null)}
+                    onCommit={(name) => {
+                      setRenaming(null)
+                      // Unchanged is not a write. Saving it would work, but it
+                      // would also broadcast the workspace to every client for
+                      // nothing every time the field is opened and dismissed.
+                      if ((name.trim() || null) !== project.label) onRenameProject(project.path, name)
+                    }}
+                  />
+                ) : (
+                  <button
+                    className="project-name"
+                    onClick={() => onSelectProject(project.path)}
+                    onDoubleClick={() => project.saved && setRenaming(project.path)}
+                    title={project.label ? `${project.label} — ${project.path}` : project.path}
+                  >
+                    <span className="project-label">{project.name}</span>
+                    {!project.saved && <span className="ghost-tag" title="The deck is running a task here, but the folder is not in your workspace">live</span>}
+                    {!project.exists && <span className="ghost-tag is-stale">missing</span>}
+                    {/* Folded away, the count is the only clue to what is in there. */}
+                    {isShut && project.sessions.length > 0 && (
+                      <span className="folded-count">{project.sessions.length}</span>
+                    )}
+                  </button>
+                )}
                 {/*
                   Outside the name rather than inside it. In the name it was a
                   flex item taking 25px off the very heading you most want to
@@ -349,18 +461,22 @@ export default function Sidebar({
                     onNewTask={onNewTask}
                     onMove={onMoveProject}
                     onRemove={onRemoveFolder}
+                    onRename={setRenaming}
                   />
                 )}
               </div>
 
               {!isShut && (
                 <div className="project-kids">
-                  <div className="project-path">{shortPath(project.path)}</div>
+                  {/* The one line that always says where this actually is —
+                      worth more once the heading above it may be a name of
+                      your own choosing rather than the folder's. */}
+                  <div className="project-path" title={project.path}>{shortPath(project.path)}</div>
                   {project.sessions.map((session) => (
                     <SessionRow
                       key={session.deckId || session.pid}
                       session={session}
-                      projectName={project.name}
+                      projectNames={[project.name, project.folderName]}
                       active={session.sessionId === selectedSession}
                       onSelect={onSelectSession}
                     />

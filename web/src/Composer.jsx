@@ -36,6 +36,26 @@ const TEXT_EXTENSIONS = [
 const MAX_DOC_BYTES = 256 * 1024
 const MAX_DOCS = 10
 
+/*
+ * A PDF, which is the one attachment that cannot be read as text.
+ *
+ * Everything in TEXT_EXTENSIONS arrives inline, inside a tag. A PDF read that
+ * way is mojibake, so it travels as its own content block instead — which is
+ * also why it is worth saying what it costs: a PDF is read page by page, as
+ * pictures as well as words, so the same spec costs far more context than the
+ * markdown version of it would. The server enforces the same ceilings; these
+ * exist so you are told which file was too big, by name, before it uploads.
+ */
+const MAX_PDF_BYTES = 10 * 1024 * 1024
+const MAX_PDFS = 5
+
+function isPdf(file) {
+  if (String(file?.type || '') === 'application/pdf') return true
+  // Same reason the text list is extensions: the browser is not reliable about
+  // the type on a dropped file, and on some systems it arrives empty.
+  return String(file?.name || '').toLowerCase().endsWith('.pdf')
+}
+
 function isTextFile(file) {
   const name = String(file?.name || '').toLowerCase()
   const ext = name.slice(name.lastIndexOf('.'))
@@ -54,6 +74,27 @@ const MAX_EDGE = 1568
 const MAX_BYTES = 5 * 1024 * 1024
 
 let nextId = 1
+
+/**
+ * The file as bare base64, which is what the document block wants.
+ *
+ * `readAsDataURL` is used rather than `readAsArrayBuffer` + a manual encode
+ * because the browser's encoder is the fast path and does not blow the stack
+ * on a ten-megabyte file the way `String.fromCharCode(...bytes)` does. The
+ * `data:...;base64,` prefix is cut off here; the API wants the payload alone,
+ * with no newlines in it, which is what this produces.
+ */
+function readAsBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onerror = () => reject(new Error(`Could not read ${file.name}`))
+    reader.onload = () => {
+      const comma = String(reader.result).indexOf(',')
+      resolve(comma >= 0 ? String(reader.result).slice(comma + 1) : '')
+    }
+    reader.readAsDataURL(file)
+  })
+}
 
 function readAsDataUrl(file) {
   return new Promise((resolve, reject) => {
@@ -157,6 +198,7 @@ export default function Composer({ disabled, onSend, onInterrupt, busy, blocked 
   const [text, setText] = useState('')
   const [images, setImages] = useState([])
   const [docs, setDocs] = useState([])
+  const [pdfs, setPdfs] = useState([])
   const [sending, setSending] = useState(false)
   const [error, setError] = useState('')
   const [queued, setQueued] = useState(false)
@@ -172,6 +214,15 @@ export default function Composer({ disabled, onSend, onInterrupt, busy, blocked 
         if (file?.type?.startsWith('image/')) {
           const image = await prepare(file)
           setImages((prev) => [...prev, image])
+        } else if (isPdf(file)) {
+          if (file.size > MAX_PDF_BYTES) {
+            throw new Error(`${file.name} is too big to attach (10 MB max)`)
+          }
+          const data = await readAsBase64(file)
+          if (!data) throw new Error(`Could not read ${file.name}`)
+          setPdfs((prev) => (
+            prev.length >= MAX_PDFS ? prev : [...prev, { id: nextId++, name: file.name, data, size: file.size }]
+          ))
         } else if (isTextFile(file)) {
           if (file.size > MAX_DOC_BYTES) {
             throw new Error(`${file.name} is too big to attach`)
@@ -184,7 +235,7 @@ export default function Composer({ disabled, onSend, onInterrupt, busy, blocked 
         } else {
           // Naming the file matters: with several dropped at once, "not a
           // file I can attach" alone leaves you guessing which one.
-          throw new Error(`${file.name || 'that file'} is not a text file or an image`)
+          throw new Error(`${file.name || 'that file'} is not a PDF, a text file or an image`)
         }
       } catch (err) {
         setError(err.message)
@@ -201,7 +252,7 @@ export default function Composer({ disabled, onSend, onInterrupt, busy, blocked 
     const files = Array.from(e.clipboardData?.items || [])
       .filter((item) => item.kind === 'file')
       .map((item) => item.getAsFile())
-      .filter((file) => file && (file.type.startsWith('image/') || isTextFile(file)))
+      .filter((file) => file && (file.type.startsWith('image/') || isPdf(file) || isTextFile(file)))
     if (!files.length) return
     /*
      * Only swallow the paste when a real file came with it. `kind === 'file'`
@@ -216,16 +267,18 @@ export default function Composer({ disabled, onSend, onInterrupt, busy, blocked 
   async function send(event) {
     event?.preventDefault()
     const value = text.trim()
-    if ((!value && !images.length && !docs.length) || sending || disabled) return
+    if ((!value && !images.length && !docs.length && !pdfs.length) || sending || disabled) return
     setSending(true)
     const payload = images.map(({ media_type, data }) => ({ media_type, data }))
     const files = docs.map(({ name, text: body }) => ({ name, text: body }))
-    const result = await onSend(value, payload, files)
+    const documents = pdfs.map(({ name, data }) => ({ name, media_type: 'application/pdf', data }))
+    const result = await onSend(value, payload, files, documents)
     setSending(false)
     if (result?.ok) {
       setText('')
       setImages([])
       setDocs([])
+      setPdfs([])
       setError('')
       /*
        * Nothing you send shows up in the transcript until the session reads
@@ -240,7 +293,7 @@ export default function Composer({ disabled, onSend, onInterrupt, busy, blocked 
     }
   }
 
-  const empty = !text.trim() && !images.length && !docs.length
+  const empty = !text.trim() && !images.length && !docs.length && !pdfs.length
 
   return (
     <form
@@ -253,7 +306,7 @@ export default function Composer({ disabled, onSend, onInterrupt, busy, blocked 
         attach(e.dataTransfer?.files)
       }}
     >
-      {(images.length > 0 || docs.length > 0) && (
+      {(images.length > 0 || docs.length > 0 || pdfs.length > 0) && (
         <div className="composer-files">
           {docs.map((doc) => (
             <span key={doc.id} className="composer-doc" title={`${doc.name} — ${Math.max(1, Math.round(doc.text.length / 1024))} KB`}>
@@ -262,6 +315,23 @@ export default function Composer({ disabled, onSend, onInterrupt, busy, blocked 
                 type="button"
                 onClick={() => setDocs((prev) => prev.filter((d) => d.id !== doc.id))}
                 title={`Remove ${doc.name}`}
+              >
+                ×
+              </button>
+            </span>
+          ))}
+          {pdfs.map((pdf) => (
+            <span
+              key={pdf.id}
+              className="composer-doc is-pdf"
+              title={`${pdf.name} — ${Math.max(1, Math.round(pdf.size / 1024))} KB`}
+            >
+              <span className="composer-doc-kind">PDF</span>
+              <span className="composer-doc-name">{pdf.name}</span>
+              <button
+                type="button"
+                onClick={() => setPdfs((prev) => prev.filter((p) => p.id !== pdf.id))}
+                title={`Remove ${pdf.name}`}
               >
                 ×
               </button>
@@ -295,14 +365,14 @@ export default function Composer({ disabled, onSend, onInterrupt, busy, blocked 
           className="btn btn-ghost btn-attach"
           onClick={() => fileRef.current?.click()}
           disabled={disabled}
-          title="Attach an image or a text file (.md, .txt, .json, source files...)"
+          title="Attach an image, a PDF, or a text file (.md, .txt, .json, source files...)"
         >
           +
         </button>
         <input
           ref={fileRef}
           type="file"
-          accept={[...IMAGE_TYPES, ...TEXT_EXTENSIONS].join(',')}
+          accept={[...IMAGE_TYPES, 'application/pdf', '.pdf', ...TEXT_EXTENSIONS].join(',')}
           multiple
           hidden
           onChange={(e) => { attach(e.target.files); e.target.value = '' }}

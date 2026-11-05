@@ -14,7 +14,7 @@ import { useEffect, useRef, useState } from 'react'
 const WARM = 70
 const HOT = 90
 
-export default function ContextMeter({ session, deck, working }) {
+export default function ContextMeter({ session, deck, working, onReading }) {
   // Only the deck's own sessions can answer. One running in a terminal is
   // observed, not driven, so there is no handle to ask through.
   const deckId = session?.managed ? session.deckId : null
@@ -27,6 +27,8 @@ export default function ContextMeter({ session, deck, working }) {
    */
   const deckRef = useRef(deck)
   deckRef.current = deck
+  const onReadingRef = useRef(onReading)
+  onReadingRef.current = onReading
 
   useEffect(() => {
     if (!deckId) {
@@ -46,7 +48,12 @@ export default function ContextMeter({ session, deck, working }) {
       // A session that ended, or one the panel navigated away from, answers
       // late. Writing that into state would leave a stale bar over a new
       // session, so a reply nobody is waiting for is dropped.
-      if (alive) setUsage(result?.ok ? result.usage : null)
+      if (!alive) return
+      const next = result?.ok ? result.usage : null
+      setUsage(next)
+      // The header's Handoff button warms up from the same reading, so it is
+      // taken once and shared rather than asked for twice.
+      onReadingRef.current?.(next ? Math.round(next.percentage) : null)
     })
     return () => { alive = false }
   }, [deckId, working])

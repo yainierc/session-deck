@@ -36,13 +36,63 @@ function write(folders) {
   }
 }
 
-/** Folders in the workspace, newest first, with the stale ones flagged. */
+/**
+ * Folders in the workspace, newest first, with the stale ones flagged.
+ *
+ * `name` is what the sidebar shows: the label you gave the folder if you gave
+ * it one, and otherwise the folder's own name. The basename is kept alongside
+ * it as `folderName` so a renamed project can still say where it actually
+ * lives, and `label` is kept apart from both so the editor can tell "I chose
+ * this name" from "this is just what the directory is called".
+ */
 export function list() {
   return read().map((f) => ({
     ...f,
-    name: path.basename(f.path),
+    name: f.label || path.basename(f.path),
+    folderName: path.basename(f.path),
+    label: f.label || null,
     exists: fs.existsSync(f.path),
   }))
+}
+
+/**
+ * What to call a folder, for anything outside the sidebar that has only a
+ * path in hand — the project page's own heading, mainly. A folder that is not
+ * in the workspace has no label to find, so it falls back to the same
+ * basename it always used.
+ */
+export function nameFor(targetPath) {
+  return read().find((f) => f.path === targetPath)?.label || path.basename(targetPath)
+}
+
+/**
+ * Give a project a name of your own, or take it back.
+ *
+ * Two folders called `web` in two different checkouts are indistinguishable in
+ * a list of eighteen-character headings, and the path underneath is truncated
+ * exactly where the difference is. A label is the cheapest fix: it changes
+ * nothing about the folder on disk, nothing about which sessions attach to it,
+ * and it is stored next to the path so it survives restarts and follows the
+ * project when it moves up the order.
+ *
+ * An empty label is a reset rather than an error — it is how you undo one
+ * without having to remember what the directory was called. The stored key is
+ * deleted in that case, so the file never accumulates `label: ""`.
+ */
+export function rename(targetPath, label) {
+  const folders = read()
+  const entry = folders.find((f) => f.path === targetPath)
+  if (!entry) return { ok: false, error: 'Add this project to the workspace to rename it' }
+
+  const next = typeof label === 'string' ? label.trim().replace(/\s+/g, ' ') : ''
+  // Long enough to be a sentence is long enough to break the heading it is in.
+  if (next.length > 60) return { ok: false, error: 'That name is too long (60 characters max)' }
+
+  if (next) entry.label = next
+  else delete entry.label
+
+  if (!write(folders)) return { ok: false, error: 'Could not save the name' }
+  return { ok: true, name: entry.label || path.basename(targetPath), label: entry.label || null }
 }
 
 /**

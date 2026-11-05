@@ -4,22 +4,25 @@ import { STATUS_LABEL, relativeTime, shortPath, describeSubpath } from './format
 import Sidebar from './Sidebar.jsx'
 import ProjectView from './ProjectView.jsx'
 import Launcher from './Launcher.jsx'
+import TeamLauncher from './TeamLauncher.jsx'
 import FolderPicker from './FolderPicker.jsx'
-import FileMap from './FileMap.jsx'
-import Timeline from './Timeline.jsx'
 import Subagents from './Subagents.jsx'
+import LiveAgents from './LiveAgents.jsx'
 import Message from './Message.jsx'
-import Atlas from './Atlas.jsx'
+import TeamView from './TeamView.jsx'
 import Room from './Room.jsx'
 import PermissionCard from './PermissionCard.jsx'
 import QuestionCard from './QuestionCard.jsx'
 import AskToasts, { askKey } from './AskToasts.jsx'
 import Composer from './Composer.jsx'
+import Progress from './Progress.jsx'
 import Inbox from './Inbox.jsx'
 import Settings from './Settings.jsx'
 import SessionControls from './SessionControls.jsx'
-import RoadmapDraft from './RoadmapDraft.jsx'
+import Plans from './Plans.jsx'
+import PickUp from './PickUp.jsx'
 import ContextMeter from './ContextMeter.jsx'
+import { HandoffButton, HandoffReady } from './Handoff.jsx'
 
 function StatusDot({ status }) {
   return <span className={`dot dot-${status}`} aria-hidden="true" />
@@ -159,7 +162,7 @@ function SessionName({ session, deck }) {
   )
 }
 
-function Conversation({ session, transcript, deck, modes }) {
+function Conversation({ session, transcript, deck, modes, onOpenTeams, onStartFromHandoff }) {
   const endRef = useRef(null)
   const count = transcript.messages.length
   const working = session?.status === 'busy'
@@ -193,6 +196,8 @@ function Conversation({ session, transcript, deck, modes }) {
   const [waking, setWaking] = useState(false)
   const [resuming, setResuming] = useState(false)
   const [view, setView] = useState('chat')
+  // Which subagent to open on arriving at the Agents tab from the live count.
+  const [agentFocus, setAgentFocus] = useState(null)
   /*
    * On a phone the header is the whole screen's worth of chrome: the name, the
    * path, the branch, the mode chips and Kill together left about a fifth of a
@@ -201,9 +206,12 @@ function Conversation({ session, transcript, deck, modes }) {
    * and ignores this entirely.
    */
   const [detailsOpen, setDetailsOpen] = useState(false)
-  /* The draft panel, opened from the header. Null when it is not on screen —
-     there is nothing to remember about it between openings. */
-  const [drafting, setDrafting] = useState(false)
+  const [proposing, setProposing] = useState(false)
+  // The context reading, shared with the Handoff button, and when that button
+  // was last pressed — which is what the "Handoff ready" card looks after.
+  const [contextPct, setContextPct] = useState(null)
+  const [handoffAskedAt, setHandoffAskedAt] = useState(null)
+  useEffect(() => { setHandoffAskedAt(null); setContextPct(null) }, [session.deckId])
 
   /*
    * A question and a permission come down the same channel and land in the
@@ -346,9 +354,18 @@ function Conversation({ session, transcript, deck, modes }) {
             className="stage-more"
             aria-expanded={detailsOpen}
             aria-controls="stage-detail"
-            aria-label={detailsOpen ? 'Hide session details' : 'Show session details'}
+            aria-label={
+              detailsOpen
+                ? 'Hide session details'
+                : `Show session details${session.agents?.length ? ` (${session.agents.length} subagents running)` : ''}`
+            }
             onClick={() => setDetailsOpen((open) => !open)}
           >
+            {/* Folded, the tabs are out of sight and the live count with
+                them; this is the one place left to say work is in flight. */}
+            {!detailsOpen && session.agents?.length > 0 && (
+              <span className="live-folded" aria-hidden="true">{session.agents.length}</span>
+            )}
             <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">
               <path d="M4 6.5 8 10.5l4-4" fill="none" stroke="currentColor"
                 strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
@@ -356,16 +373,13 @@ function Conversation({ session, transcript, deck, modes }) {
           </button>
 
           {/*
-            Ways of watching the same session: what it is saying, what it is
-            touching, how it got here, and what it delegated. A toggle rather
-            than a split pane — at this width half a conversation and half a
-            map would be neither.
+            Two ways of watching the same session: what it is saying, and
+            what it delegated. A toggle rather than a split pane — at this
+            width, half of each would be neither.
           */}
           <div className="seg" role="tablist" aria-label="How to watch this session">
             {[
               { id: 'chat', label: 'Chat', hint: 'What it is saying' },
-              { id: 'map', label: 'Map', hint: 'What it is touching, live' },
-              { id: 'timeline', label: 'Timeline', hint: 'How the session unfolded' },
               { id: 'agents', label: 'Agents', hint: 'What its subagents said' },
             ].map((tab) => (
               <button
@@ -379,6 +393,15 @@ function Conversation({ session, transcript, deck, modes }) {
                 {tab.label}
               </button>
             ))}
+            {/* Beside the tab it belongs to, not inside it: a button cannot
+                hold another, and the count opens its own list. */}
+            <LiveAgents
+              agents={session.agents}
+              onOpen={(toolUseId) => {
+                setAgentFocus(toolUseId ? { toolUseId, at: Date.now() } : null)
+                setView('agents')
+              }}
+            />
           </div>
 
           {/*
@@ -388,25 +411,77 @@ function Conversation({ session, transcript, deck, modes }) {
             the work already in flight.
           */}
           {session.managed && !finished && (
-            <SessionControls session={session} deck={deck} modes={modes} />
+            /*
+              `granted` comes off the transcript rather than out of the session
+              list, because the session's own startup message carries neither
+              the effort nor the advisor. It is read from the turns the session
+              has already taken, which is the only place either one is written
+              down.
+            */
+            <SessionControls
+              session={session}
+              deck={deck}
+              modes={modes}
+              granted={transcript.granted}
+            />
+          )}
+
+
+          {/*
+            The other thing an analysis ends in. The roadmap button turns a
+            written plan into milestones this repository can run; this one asks
+            the session who should run them — which it can answer and a form
+            cannot, because the answer is in the conversation beside it.
+
+            Only for sessions the deck drives: this is a message into that
+            conversation, and there is nothing to send one to otherwise.
+
+          {/*
+            What an analysis ends in. This asks the session who should do the
+            work — which it can answer and a form cannot, because the answer is
+            in the conversation beside it.
+
+            Only for sessions the deck drives: this is a message into that
+            conversation, and there is nothing to send one to otherwise.
+          */}
+          {session.managed && !finished && (
+            <button
+              className="ctl"
+              disabled={proposing}
+              onClick={async () => {
+                setProposing(true)
+                const response = await fetch('/api/team-proposal', {
+                  method: 'POST',
+                  headers: { 'content-type': 'application/json' },
+                  body: JSON.stringify({ deckId: session.deckId }),
+                })
+                const result = await response.json().catch(() => ({ ok: false }))
+                setProposing(false)
+                if (result.ok) onOpenTeams()
+                else window.alert(result.error || 'Could not ask for a team')
+              }}
+              title="Ask this session which team the work needs, based on what it already knows"
+            >
+              {proposing ? 'Asking...' : 'Propose a team'}
+            </button>
           )}
 
           {/*
-            The end of an analysis, and the only part of it that is typing.
-            You have just agreed a plan with this session and it has written
-            the document; what is left is turning the slice this repository can
-            execute into milestones. The button is here rather than in the
-            roadmap panel because this is where you are standing when the
-            analysis finishes, and because the transcript beside it already
-            knows which document was just written.
+            Write down where the work stands, for the next session. It is the
+            skill, sent as a message — so it waits its turn like anything you
+            type, and works the same from a terminal.
           */}
-          <button
-            className="ctl"
-            onClick={() => setDrafting(true)}
-            title="Turn a plan already written in this project into roadmap milestones"
-          >
-            Roadmap
-          </button>
+          {session.managed && !finished && (
+            <HandoffButton
+              pct={contextPct}
+              disabled={Boolean(pending)}
+              onClick={async () => {
+                const result = await deck.say(session.deckId, '/handoff')
+                if (result?.ok === false) window.alert(result.error || 'Could not ask for a handoff')
+                else setHandoffAskedAt(Date.now())
+              }}
+            />
+          )}
 
           {/*
             Nothing is running it, and the conversation is on disk. Typing at
@@ -448,17 +523,6 @@ function Conversation({ session, transcript, deck, modes }) {
         </div>
       </header>
 
-      {drafting && (
-        <RoadmapDraft
-          session={session}
-          /* What this session has touched, which the map is already being fed.
-             Nothing new is fetched: the list of documents it wrote is a read
-             of the transcript the pane is holding anyway. */
-          events={transcript.events || []}
-          onClose={() => setDrafting(false)}
-        />
-      )}
-
       {/*
         The line you consult. Everything here is read, never clicked, which
         is the whole basis of the split: it can be quiet, small, and last.
@@ -470,7 +534,7 @@ function Conversation({ session, transcript, deck, modes }) {
         {/* Nothing breaks when the context fills — the conversation gets
             summarised and carries on — so it belongs with what you consult
             rather than with what you act on. */}
-        <ContextMeter session={session} deck={deck} working={working} />
+        <ContextMeter session={session} deck={deck} working={working} onReading={setContextPct} />
         <span className="stage-time">{relativeTime(session.startedAt)}</span>
         {/* The one thing on this line that is not merely informative: a
             session blocked on you is something to go and do. */}
@@ -500,40 +564,20 @@ function Conversation({ session, transcript, deck, modes }) {
         already on screen is a warning you stop reading.
       */}
 
-      {view === 'timeline' && (
-        <Timeline
-          events={transcript.events || []}
-          cwd={transcript.meta?.cwd || session.cwd}
-          live={working}
-        />
-      )}
-
       {view === 'agents' && (
         <Subagents
           // Remount on a session change: the open conversation, the list and
           // the in-flight fetch all belong to the session that was showing.
           key={transcript.sessionId || session.deckId || 'none'}
           sessionId={session.sessionId}
+          focus={agentFocus}
+          live={session.agents}
         />
-      )}
-
-      {view === 'map' && (
-        <>
-          <FileMap
-            // Remounting on a session change is the cheapest correct reset:
-            // the map's animation state is all refs, and none of it is true
-            // of the next session.
-            key={transcript.sessionId || 'none'}
-            events={transcript.events || []}
-            cwd={transcript.meta?.cwd || session.cwd}
-            live={working}
-          />
-        </>
       )}
 
       {/* A question waiting on you outranks whichever view you chose. */}
       {view !== 'chat' && pending && (
-        <div className="map-permission">{ask}</div>
+        <div className="view-permission">{ask}</div>
       )}
 
       <div className="transcript" hidden={view !== 'chat'}>
@@ -583,6 +627,19 @@ function Conversation({ session, transcript, deck, modes }) {
               Nothing is running. Your next message starts it back up where it left off.
             </p>
           )}
+          {/* The session's own checklist, between the hint and the box. It
+              draws nothing until the session has sent one, so on a short task
+              this row does not exist. */}
+          {handoffAskedAt && (
+            <HandoffReady
+              cwd={session.cwd}
+              askedAt={handoffAskedAt}
+              working={working}
+              onStart={(note) => { setHandoffAskedAt(null); onStartFromHandoff(note) }}
+              onDismiss={() => setHandoffAskedAt(null)}
+            />
+          )}
+          <Progress todos={session.todos} onClear={() => deck.clearTodos(session.deckId)} />
           <Composer
             disabled={finished}
             busy={working}
@@ -606,6 +663,8 @@ export default function App() {
 
   // The main pane shows either a conversation or a project, never both.
   const [view, setView] = useState({ kind: 'none' })
+  const [teamOpen, setTeamOpen] = useState(false)
+  const [teamDraft, setTeamDraft] = useState(null)
 
   // On a phone the sidebar is a drawer over the content rather than a column
   // beside it. Desktop ignores this: there the sidebar is always in the grid.
@@ -619,6 +678,8 @@ export default function App() {
     return fn(...args)
   }, [])
   const [launcherFor, setLauncherFor] = useState(null)
+  // A handoff note to have chosen already when the launcher opens.
+  const [launchNote, setLaunchNote] = useState(null)
   const [picking, setPicking] = useState(false)
   const [modes, setModes] = useState([])
 
@@ -723,6 +784,24 @@ export default function App() {
   }
 
   /**
+   * Name a project something other than its folder.
+   *
+   * Same PATCH and same silence on success as a move, for the same reason: the
+   * server broadcasts the workspace after writing, so the heading, the project
+   * page and any other device all redraw from one push rather than from this
+   * function guessing at the new state.
+   */
+  async function renameProject(path, name) {
+    const response = await fetch('/api/workspace', {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ path, name }),
+    })
+    const result = await response.json().catch(() => ({ ok: false }))
+    if (!result.ok) window.alert(result.error || 'Could not save that name')
+  }
+
+  /**
    * Drop a folder from the workspace. The folder on disk is untouched and any
    * session running in it keeps running — it only stops being tracked here.
    *
@@ -787,19 +866,31 @@ export default function App() {
         inboxActive={view.kind === 'inbox' || view.kind === 'none'}
         onOpenSettings={nav(() => setView({ kind: 'settings' }))}
         settingsActive={view.kind === 'settings'}
-        onOpenAtlas={nav(() => setView({ kind: 'atlas' }))}
-        atlasActive={view.kind === 'atlas'}
         onOpenRoom={nav(() => setView({ kind: 'room' }))}
+        onOpenPlans={nav(() => setView({ kind: 'plans' }))}
+        plansActive={view.kind === 'plans'}
+        onOpenPickUp={nav(() => setView({ kind: 'pickup' }))}
+        pickUpActive={view.kind === 'pickup'}
         roomActive={view.kind === 'room'}
         connected={connected}
         onNewTask={nav((path) => setLauncherFor(path))}
         onBrowseFolders={nav(() => setPicking(true))}
         onRemoveFolder={removeFolder}
         onMoveProject={moveProject}
+        onRenameProject={renameProject}
+        onOpenTeam={nav(() => setView({ kind: 'team' }))}
+        teamActive={view.kind === 'team'}
       />
 
       {view.kind === 'session' && session && (
-        <Conversation session={session} transcript={transcript} deck={deck} modes={modes} />
+        <Conversation
+          session={session}
+          transcript={transcript}
+          deck={deck}
+          modes={modes}
+          onOpenTeams={() => setView({ kind: 'team' })}
+          onStartFromHandoff={(note) => { setLaunchNote(note.file); setLauncherFor(note.checkout) }}
+        />
       )}
       {view.kind === 'project' && project && (
         <ProjectView
@@ -811,8 +902,21 @@ export default function App() {
         />
       )}
       {view.kind === 'settings' && <Settings />}
-      {view.kind === 'atlas' && <Atlas sessions={sessions} onOpenSession={openSession} />}
+      {view.kind === 'team' && (
+        <TeamView
+          teamId={view.teamId || null}
+          deck={deck}
+          onOpenSession={openSession}
+          onOpenTeam={(id) => setView({ kind: 'team', teamId: id || null })}
+          /* Raising a team belongs on the screen where you watch one, not in a
+             menu beside it: it is the thing you do once before living here. */
+          onNewTeam={() => { setTeamDraft(null); setTeamOpen(true) }}
+          onCompose={(draft) => { setTeamDraft(draft); setTeamOpen(true) }}
+        />
+      )}
       {view.kind === 'room' && <Room onOpenSession={openSession} />}
+      {view.kind === 'plans' && <Plans onOpenProject={openProject} />}
+      {view.kind === 'pickup' && <PickUp onOpenProject={openProject} />}
       {(view.kind === 'inbox' || view.kind === 'none' || (view.kind === 'session' && !session)) && (
         <Inbox
           sessions={sessions}
@@ -840,8 +944,10 @@ export default function App() {
         hideFor={view.kind === 'session' ? askKey(session) : null}
         /* "What needs you" is the queue of exactly these asks, with the same
            buttons on them. Floating a second copy over the first is not
-           urgency, it is double vision. */
-        silent={view.kind === 'inbox' || view.kind === 'none'}
+           urgency, it is double vision. A team is the same case seen from the
+           other side: every session that could be asking has a card on
+           screen, and the ask is drawn inside it. */
+        silent={['inbox', 'none', 'team'].includes(view.kind)}
         onOpenSession={nav(openSession)}
         onOpenInbox={nav(() => setView({ kind: 'inbox' }))}
       />
@@ -872,10 +978,20 @@ export default function App() {
           {waitingTotal > 0 && <span className="tab-dot">{waitingTotal}</span>}
         </button>
 
-        {sessionTotal > 1 && (
+        {/*
+          This slot was "Agents": every running session as a grid of live file
+          maps, ordered by whichever was busiest. The teams screen answers the
+          same question — what is everything doing — with the arrangement you
+          declared rather than one worked out from who touched most files, so
+          the grid went and the slot stays.
+
+          The drawer had the only way to a team, which on a phone is two taps
+          and a scroll to reach the screen you live on.
+        */}
+        {sessionTotal > 0 && (
           <button
-            className={view.kind === 'atlas' ? 'is-on' : ''}
-            onClick={nav(() => setView({ kind: 'atlas' }))}
+            className={view.kind === 'team' ? 'is-on' : ''}
+            onClick={nav(() => setView({ kind: 'team' }))}
           >
             <svg viewBox="0 0 20 20" width="21" height="21" aria-hidden="true">
               <circle cx="10" cy="10" r="2.2" fill="none" stroke="currentColor" strokeWidth="1.4" />
@@ -885,8 +1001,7 @@ export default function App() {
               <path d="M8.6 8.3 5.7 6.2M11.4 8.3l2.9-2.1M10 12.2v2.5"
                 fill="none" stroke="currentColor" strokeWidth="1.3" />
             </svg>
-            Agents
-            <span className="tab-dot quiet">{sessionTotal}</span>
+            Team
           </button>
         )}
 
@@ -912,6 +1027,20 @@ export default function App() {
         known={projects.filter((p) => p.saved).map((p) => p.path)}
       />
 
+      <TeamLauncher
+        open={teamOpen}
+        projects={deck.projects}
+        sessions={deck.sessions}
+        draft={teamDraft}
+        onClose={() => { setTeamOpen(false); setTeamDraft(null) }}
+        /*
+          The results come back here rather than being swallowed: a team where
+          three came up and one did not is three sessions running, and the
+          modal has to be able to say which is which.
+        */
+        onRaise={(options) => deck.team(options)}
+      />
+
       <Launcher
         open={Boolean(launcherFor)}
         fixedCwd={launcherFor}
@@ -921,9 +1050,11 @@ export default function App() {
          * what it needs from here is the same list the sidebar draws.
          */
         sessions={deck.sessions}
-        onClose={() => setLauncherFor(null)}
-        onLaunch={async (cwd, prompt, permissionMode, name, peers) => {
-          const result = await deck.launch(cwd, prompt, permissionMode, name, peers)
+        preselectNote={launchNote}
+        onStopSession={(deckId) => deck.stop(deckId)}
+        onClose={() => { setLauncherFor(null); setLaunchNote(null) }}
+        onLaunch={async (options) => {
+          const result = await deck.launch(options)
           if (result?.ok) setView({ kind: 'session', deckId: result.deckId })
           return result
         }}

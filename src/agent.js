@@ -11,10 +11,13 @@
  */
 import { EventEmitter } from 'node:events'
 import { randomUUID } from 'node:crypto'
-import { query } from '@anthropic-ai/claude-agent-sdk'
+import { query, resolveSettings } from '@anthropic-ai/claude-agent-sdk'
 // Aliased: `peerName` is also the field it produces, and a function shadowed
 // by a parameter of the same name inside register() is a trap to leave set.
-import { peerName as composePeerName, withRoster } from './roster.js'
+import { peerName as composePeerName, withRoster, MAX_PEERS } from './roster.js'
+import { cleanModel, cleanEffort, cleanAdvisor, spawnSettings } from './choices.js'
+import { progressServer, cleanTodos, SERVER_NAME, PROGRESS_TOOL, PROGRESS_GUIDE } from './progress.js'
+import { createLiveAgents } from './live-agents.js'
 
 /**
  * What a managed session can be doing, from the panel's point of view.
@@ -131,6 +134,27 @@ const MAX_DOC_BYTES = 256 * 1024
 const MAX_DOCS_BYTES = 512 * 1024
 const MAX_DOC_NAME = 120
 
+/**
+ * A PDF, which is the one attachment that cannot travel as text.
+ *
+ * Everything above arrives inline because it is text and a tag is enough. A
+ * PDF read as text is mojibake, and mojibake in a prompt costs context and
+ * teaches Claude nothing — so it goes as a `document` content block, base64,
+ * which is the shape the Messages API documents for exactly this.
+ *
+ * The ceilings are below the API's own on purpose. It allows 32 MB per
+ * request and 600 pages — 100 on a 200K-context model — and the cost of
+ * finding that out at the API is a turn that fails after the upload. These
+ * are enforced here and said in the panel by name, before anything is sent.
+ *
+ * Measured against the decoded size rather than the base64 string: base64 is
+ * four characters for every three bytes, so a limit written against the
+ * encoded form would be a third smaller than it looks.
+ */
+const MAX_PDFS = 5
+const MAX_PDF_BYTES = 10 * 1024 * 1024
+const MAX_PDFS_BYTES = 20 * 1024 * 1024
+
 /** A name safe to sit inside the tag's quotes, or a usable stand-in. */
 function docName(value) {
   const clean = String(value || '').replace(/[\r\n"<>]/g, '').trim().slice(0, MAX_DOC_NAME)
@@ -145,7 +169,7 @@ function docName(value) {
  * array, and they go first: Claude reads an instruction better when what it
  * refers to is already in front of it.
  */
-export function buildContent(text, images = [], docs = []) {
+export function buildContent(text, images = [], docs = [], documents = []) {
   const blocks = []
   for (const image of Array.isArray(images) ? images.slice(0, MAX_IMAGES) : []) {
     const mediaType = image?.media_type
@@ -154,6 +178,28 @@ export function buildContent(text, images = [], docs = []) {
     // base64 carries 4 characters per 3 bytes; this is the size the API sees.
     if (Math.floor(data.length * 0.75) > MAX_IMAGE_BYTES) continue
     blocks.push({ type: 'image', source: { type: 'base64', media_type: mediaType, data } })
+  }
+
+  /*
+   * PDFs, before the words. The API documents the document block as going
+   * ahead of the text it is about, and it is the same reason the images do:
+   * Claude reads an instruction better when what it refers to is already in
+   * front of it.
+   */
+  let pdfSpent = 0
+  for (const document of Array.isArray(documents) ? documents.slice(0, MAX_PDFS) : []) {
+    const data = typeof document?.data === 'string' ? document.data : ''
+    // Only PDF. The base64 document block takes other media types, and every
+    // one of them that is text is better served by the inline path below.
+    if (document?.media_type !== 'application/pdf' || !data) continue
+    // base64 carries 4 characters per 3 bytes; this is the size the API sees.
+    const size = Math.floor(data.length * 0.75)
+    if (size > MAX_PDF_BYTES || pdfSpent + size > MAX_PDFS_BYTES) continue
+    pdfSpent += size
+    blocks.push({
+      type: 'document',
+      source: { type: 'base64', media_type: 'application/pdf', data },
+    })
   }
 
   let spent = 0
@@ -276,8 +322,11 @@ export function questionsFrom(toolName, input) {
  * in something that does not spawn a CLI. The permission queue below is worth
  * a test: it is the difference between answering a prompt and losing an hour
  * of work to a session that will never move again.
+ *
+ * `readSettings` is there for the same reason: it reads the settings cascade
+ * off disk, which a test has no business doing.
  */
-export function createAgentManager({ start = query } = {}) {
+export function createAgentManager({ start = query, readSettings = resolveSettings } = {}) {
   const emitter = new EventEmitter()
   /** deckId -> managed session */
   const sessions = new Map()
@@ -345,6 +394,26 @@ export function createAgentManager({ start = query } = {}) {
       effort: s.effortKnown ? s.effort ?? null : undefined,
       requestedEffort: s.requestedEffort || null,
       /*
+       * Which model was asked to advise, and no field beside it for which one
+       * actually did.
+       *
+       * There is no granted counterpart to publish yet: the session's own
+       * startup message carries neither the effort nor the advisor, and a
+       * pairing the API refuses is refused silently — the request is simply
+       * never attached. So this is named for what it is, and the panel must
+       * not draw it as a fact about the running session until there is
+       * something to read it back from.
+       */
+      requestedAdvisor: s.requestedAdvisor || null,
+      // Said at composition, never guessed. See register().
+      delegates: Boolean(s.delegates),
+      /*
+       * The progress list, always an array. Empty and absent are the same
+       * thing to the panel — it draws nothing — so there is no third state
+       * here to tell apart, unlike `effort` above.
+       */
+      todos: s.todos || [],
+      /*
        * No process behind it, but a conversation on disk that can get one.
        * The panel branches on this to offer a composer that says "resume"
        * instead of hiding it the way it does for a session that is over.
@@ -368,7 +437,31 @@ export function createAgentManager({ start = query } = {}) {
       // How many are parked in total, so the panel can say that answering this
       // one brings up another instead of appearing to finish the job.
       pendingCount: s.pending.size,
+      // Only a session the deck drives can say this as it happens; a watched
+      // one has no stream, so the field is absent rather than an empty list.
+      agents: s.live.list(),
     }
+  }
+
+  /**
+   * Publish a subagent change: starts and ends at once, progress at most
+   * every few seconds. Progress arrives several times a second per agent and
+   * every publish rewrites the session list on disk.
+   */
+  const LIVE_PUBLISH_MS = 3000
+  function publishLive(session, { urgent }) {
+    if (urgent) {
+      clearTimeout(session.liveTimer)
+      session.liveTimer = null
+      publish(session)
+      return
+    }
+    if (session.liveTimer) return
+    session.liveTimer = setTimeout(() => {
+      session.liveTimer = null
+      publish(session)
+    }, LIVE_PUBLISH_MS)
+    session.liveTimer.unref?.()
   }
 
   function setStatus(session, status) {
@@ -398,7 +491,7 @@ export function createAgentManager({ start = query } = {}) {
    * afterwards moves the label and not the address, because the address went
    * out as a flag at spawn — the panel must not imply otherwise.
    */
-  function register({ deckId, cwd, title, derivedTitle, peerName = null, permissionMode, model, status, sessionId = null, startedAt = null }) {
+  function register({ deckId, cwd, title, derivedTitle, peerName = null, permissionMode, model, effort, advisor, delegates = false, status, sessionId = null, startedAt = null, todos = [] }) {
     const session = {
       deckId,
       sessionId,
@@ -410,6 +503,29 @@ export function createAgentManager({ start = query } = {}) {
       permissionMode,
       requestedMode: permissionMode,
       model: model || null,
+      /*
+       * The effort and the advisor asked for, never the ones granted.
+       *
+       * `session.effort` is filled in from what the session reports and stays
+       * undefined until it does; writing a request into it would make the chip
+       * show your own wish back at you, which is the one thing a status field
+       * must never do. These two are read at spawn and are what a woken
+       * session is started with again — the model has always been replayed
+       * that way, and an effort that survived the first turn but not the first
+       * sleep was the same lie told slower.
+       */
+      requestedEffort: cleanEffort(effort),
+      requestedAdvisor: cleanAdvisor(advisor, model),
+      /*
+       * Whether this one hands out the work to the others.
+       *
+       * Said when the team is composed and kept, rather than worked out later
+       * from who talks most: traffic makes a plausible organisation chart and
+       * a false one — the busiest session is often the one being asked, not
+       * the one asking. A drawing that infers the hierarchy is a drawing that
+       * will be confidently wrong on the day it matters.
+       */
+      delegates: Boolean(delegates),
       modeNote: null,
       startedAt: startedAt || Date.now(),
       /*
@@ -421,6 +537,18 @@ export function createAgentManager({ start = query } = {}) {
        * going to move again.
        */
       pending: new Map(),
+      // The subagents running right now, as the stream reports them.
+      live: createLiveAgents(),
+      liveTimer: null,
+      /*
+       * The checklist the session keeps about its own work, newest wins.
+       *
+       * Cleaned on the way in even here, because this is also the path a
+       * restart comes back through: `adopt` hands over whatever was in
+       * handoff.json, and that is a file on disk rather than something the
+       * schema already checked.
+       */
+      todos: cleanTodos(todos),
       input: null,
       query: null,
       error: null,
@@ -453,11 +581,50 @@ export function createAgentManager({ start = query } = {}) {
     // for every launch would throw that safeguard away.
     const bypassing = session.permissionMode === 'bypassPermissions'
 
+    const settings = spawnSettings({
+      effort: session.requestedEffort,
+      advisor: session.requestedAdvisor,
+    })
+
+
+    /*
+     * The session's own checklist, wired to this session.
+     *
+     * Built here and not once for the deck because the handler's whole job is
+     * to write to *this* session: an MCP tool is handed no caller identity, so
+     * the only moment it can learn which session it belongs to is the moment
+     * it is built. One server per spawn, closing over one `session`.
+     *
+     * Publishing from inside the handler is what makes the list live. The
+     * browser has the new state before the tool has returned, which is a turn
+     * earlier than anything that waited to read it back out of the transcript.
+     */
+    const panel = progressServer((todos) => {
+      session.todos = todos
+      publish(session)
+    })
+
     const q = start({
       prompt: input,
       options: {
         cwd: session.cwd,
         permissionMode: session.permissionMode,
+        /*
+         * The progress tool, and the instruction to use it.
+         *
+         * `allowedTools` here is the auto-allow list, not a restriction on
+         * what exists — the SDK's own words: "to restrict which tools are
+         * available, use the `tools` option instead". Without it this tool
+         * would raise a permission card every time the session ticked a box,
+         * which is the opposite of a list that updates itself.
+         *
+         * The preset is Claude Code's own system prompt, which is what an
+         * omitted `systemPrompt` already resolves to; naming it is what buys
+         * the `append`. So this adds the guide and changes nothing else.
+         */
+        mcpServers: { [SERVER_NAME]: panel },
+        allowedTools: [PROGRESS_TOOL],
+        systemPrompt: { type: 'preset', preset: 'claude_code', append: PROGRESS_GUIDE },
         /*
          * Resuming keeps the session id, so the transcript the panel is
          * already streaming carries on in the same file rather than forking
@@ -478,8 +645,40 @@ export function createAgentManager({ start = query } = {}) {
          * keep the name the CLI derives for them.
          */
         ...(session.peerName ? { extraArgs: { name: session.peerName } } : {}),
+        /*
+         * The Artifact tools, which a terminal session has and an SDK one does
+         * not. The CLI turns them off for the `sdk-ts` entrypoint unless
+         * CLAUDE_CODE_ARTIFACT says otherwise ("sdk_default_off" in its own
+         * gate) — a default for programs embedding Claude, not for a panel
+         * that is a terminal session with a different face. Without it a
+         * session here cannot read or update an artifact you made in one.
+         *
+         * `env` replaces the child's environment rather than merging into it,
+         * hence the spread. A value already set wins, so CLAUDE_CODE_ARTIFACT=0
+         * in the shell that starts the deck still turns them off, and so does
+         * `enableArtifact: false` in settings, which the CLI checks after this.
+         */
+        env: { ...process.env, CLAUDE_CODE_ARTIFACT: process.env.CLAUDE_CODE_ARTIFACT ?? '1' },
         ...(bypassing ? { allowDangerouslySkipPermissions: true } : {}),
         ...(session.model ? { model: session.model } : {}),
+        /*
+         * Effort and the advisor, in the one place they can be set before the
+         * first turn happens.
+         *
+         * Neither has an option of its own: they live in settings, and the
+         * inline `settings` layer is the session-scoped one — above the user's
+         * files, below managed policy, and written to no file. The methods
+         * that change them mid-session need a running process, and by the time
+         * there is one the first prompt has already gone into the stream, so
+         * anything applied afterwards would be a turn too late for the turn
+         * where the plan gets decided.
+         *
+         * Sent on every spawn for the same reason the name is: waking a
+         * session starts a new process, and one that came back thinking less
+         * hard than it went to sleep would be a silent downgrade nobody asked
+         * for.
+         */
+        ...(settings ? { settings } : {}),
         // Load the same CLAUDE.md and permission rules a normal session sees,
         // so what auto-allows here matches what auto-allows in the terminal.
         settingSources: ['user', 'project', 'local'],
@@ -502,7 +701,7 @@ export function createAgentManager({ start = query } = {}) {
     return session
   }
 
-  function launch({ cwd, prompt, name, permissionMode = 'default', model, taken = [], peers = [] }) {
+  function launch({ cwd, prompt, name, permissionMode = 'default', model, effort, advisor, delegates = false, taken = [], peers = [] }) {
     if (!cwd) throw new Error('cwd is required')
     if (!prompt || !prompt.trim()) throw new Error('prompt is required')
 
@@ -528,12 +727,128 @@ export function createAgentManager({ start = query } = {}) {
        */
       peerName: composePeerName(cwd, name, taken),
       permissionMode,
-      model,
+      /*
+       * Cleaned here rather than at the edge, because this is the funnel every
+       * launch goes through — the panel's, a roadmap's, a report's, a
+       * milestone's. A guard at one entrance is a guard the next entrance does
+       * not have.
+       */
+      model: cleanModel(model),
+      effort,
+      advisor,
+      delegates,
       status: 'working',
     })
 
     spawn(session, withRoster(prompt, peers))
     return toPublic(session)
+  }
+
+  /**
+   * Start several sessions as one act, and introduce them to each other.
+   *
+   * Launching a team by hand is the same modal four times over, and what comes
+   * out is worse than four launches: the roster paragraph goes into a
+   * session's first prompt and only there, so the first one you start is the
+   * one that knows nobody. Arranging the introductions needs somebody who
+   * knows the whole list, which is here and is nowhere else.
+   *
+   * ### The one that delegates goes last
+   *
+   * The whole trick, and it costs nothing. A session can only be introduced to
+   * sessions that already exist, so the order decides who knows whom — and the
+   * direction that matters is the supervisor knowing its workers, because it
+   * is the one that has to go and ask. A worker needs no introduction in
+   * return: a message arrives carrying the name of whoever sent it, so
+   * replying is always possible, to anyone.
+   *
+   * ### Nothing is rolled back
+   *
+   * If the fourth fails to start, the first three are running and stay
+   * running. There is no un-launching a session, and stopping three working
+   * ones to make a failure look tidy would throw away real work to preserve a
+   * transaction nobody asked for. What comes back is one result per member,
+   * and the caller is expected to say so.
+   *
+   * @param members one per session: where it runs, what it does, how it thinks
+   * @param peers   already-resolved sessions outside the team to introduce too
+   * @param taken   addresses already answering, so the new names come out free
+   */
+  function launchTeam({ members = [], permissionMode = 'default', peers = [], taken = [] }) {
+    /*
+     * Tagged with where it came from before the order changes, because the
+     * order does change: the ones that hand out the work go last. A caller
+     * matching a result back to the member it asked for has nothing else to go
+     * on — two members of the same role have the same name by design, and
+     * matching on that silently gave both of them the first one's properties.
+     */
+    const ordered = members
+      .map((member, at) => ({ member, at }))
+      .sort((a, b) => Number(Boolean(a.member.delegates)) - Number(Boolean(b.member.delegates)))
+
+    const names = [...taken]
+    const born = []
+    const results = []
+
+    for (const { member, at } of ordered) {
+      /*
+       * Everyone this one could be told about: the sessions you ticked, plus
+       * the team members already started. Capped here and the cap reported,
+       * rather than applied quietly — `resolvePeers` stops at the limit with a
+       * break, so a ninth peer is dropped by whatever order the list happened
+       * to be in. Being told about seven of your eight colleagues without
+       * knowing which one is missing is worse than being told about none.
+       */
+      const candidates = [...peers, ...born]
+      const introduced = candidates.slice(0, MAX_PEERS)
+
+      try {
+        const session = launch({
+          cwd: member.cwd,
+          prompt: member.prompt,
+          name: member.name,
+          permissionMode,
+          model: member.model,
+          effort: member.effort,
+          advisor: member.advisor,
+          taken: names,
+          peers: introduced,
+          delegates: member.delegates,
+        })
+
+        /*
+         * The address is only known once the launch has composed it, and the
+         * next member has to see it: two sessions under one name is the case
+         * where delivery stops being unambiguous for both of them.
+         */
+        if (session.peerName) names.push(session.peerName)
+        born.push({
+          name: session.peerName || session.title,
+          project: member.project || '',
+          cwd: member.cwd,
+          status: 'working',
+          permissionMode,
+        })
+
+        results.push({
+          ok: true,
+          // Which of the members asked for this is, by position. See above.
+          at,
+          deckId: session.deckId,
+          name: session.peerName,
+          label: session.title,
+          introduced: introduced.map((p) => p.name),
+          // Per member, because this is the number that decides whether a team
+          // works: past the limit somebody is working beside colleagues they
+          // were never told about.
+          notIntroduced: candidates.length - introduced.length,
+        })
+      } catch (err) {
+        results.push({ ok: false, at, label: member.name || member.cwd, error: err.message })
+      }
+    }
+
+    return results
   }
 
   /**
@@ -551,7 +866,7 @@ export function createAgentManager({ start = query } = {}) {
    * first message arrives, so a process started early would sit there proving
    * nothing while it burned a slot.
    */
-  function adopt({ sessionId, cwd, name, permissionMode = 'default', model, deckId, startedAt }) {
+  function adopt({ sessionId, cwd, name, permissionMode = 'default', model, effort, advisor, delegates, deckId, startedAt, todos }) {
     if (!sessionId) return { ok: false, error: 'sessionId is required' }
     if (!cwd) return { ok: false, error: 'cwd is required' }
 
@@ -572,9 +887,25 @@ export function createAgentManager({ start = query } = {}) {
       derivedTitle: title,
       title,
       permissionMode,
-      model,
+      model: cleanModel(model),
+      /*
+       * Carried across a restart of the deck for the same reason the model is.
+       * A session adopted from the handoff file is woken later, and waking is
+       * a spawn: without these it would come back thinking less hard than it
+       * was, and nothing on screen would say so.
+       */
+      effort,
+      advisor,
+      delegates,
       status: 'detached',
       startedAt,
+      /*
+       * What it had got through before the deck went down. Restored with the
+       * conversation because a list that reset on every restart would be a
+       * list you stop trusting — and the session itself does not know it
+       * restarted, so it will not send the plan again unasked.
+       */
+      todos,
     })
     publish(session)
     return { ok: true, deckId: session.deckId }
@@ -735,13 +1066,13 @@ export function createAgentManager({ start = query } = {}) {
   }
 
   /** Send a follow-up message to a running session. */
-  function say(deckId, text, images = [], docs = []) {
+  function say(deckId, text, images = [], docs = [], documents = []) {
     const session = sessions.get(deckId)
     if (!session) return { ok: false, error: 'unknown session' }
     if (session.status === 'done' || session.status === 'error') {
       return { ok: false, error: 'session has finished' }
     }
-    const content = buildContent(text, images, docs)
+    const content = buildContent(text, images, docs, documents)
     // Works for both shapes: '' and [] are the same "nothing to say" here.
     if (!content.length) return { ok: false, error: 'nothing to send' }
 
@@ -817,6 +1148,37 @@ export function createAgentManager({ start = query } = {}) {
   }
 
   /**
+   * Wake a set of sessions in one press.
+   *
+   * A restart leaves every session resumable, and a team is exactly the case
+   * where that costs six presses to get back to where you were — the deck put
+   * them to sleep as a group and gave you no way to bring them back as one.
+   *
+   * Who is in the set comes from the caller rather than being worked out here.
+   * The team is a thing the screen knows and this layer does not, and keeping
+   * it that way means the same call serves a team, a project, or the whole
+   * list without this file learning what any of those are.
+   *
+   * Nobody's failure stops anyone else's: a member that has finished for good
+   * is reported and the other five still come up. `already` is kept apart from
+   * `woken` because "six woken" when five were running is a lie about what
+   * just happened, and the sentence the caller shows is built from these.
+   */
+  function wakeMany(deckIds) {
+    const ids = [...new Set((deckIds || []).filter(Boolean))]
+    const results = ids.map((deckId) => ({ deckId, ...wake(deckId) }))
+    const failed = results.filter((r) => !r.ok)
+    return {
+      // Only a set where nothing at all came up is a failed wake. One dead
+      // member among five that started is five sessions you now have.
+      ok: failed.length === 0 || failed.length < results.length,
+      woken: results.filter((r) => r.ok && !r.already).length,
+      already: results.filter((r) => r.already).length,
+      failed: failed.map((r) => ({ deckId: r.deckId, error: r.error })),
+    }
+  }
+
+  /**
    * Relabel a running session.
    *
    * Only the deck's own label moves. Nothing is written to disk and nothing is
@@ -836,6 +1198,25 @@ export function createAgentManager({ start = query } = {}) {
     session.title = next
     publish(session)
     return { ok: true, title: next }
+  }
+
+  /**
+   * Replace the progress list from the panel side — in practice, empty it.
+   *
+   * The × on the strip is the only caller, and what it means is "I have read
+   * this, take it off my screen". It does not tell the session anything: the
+   * next call to the tool brings a list straight back, which is the intended
+   * way out of a stale one. Clearing a list a session is still working
+   * through is therefore cheap to undo, and that is why the button needs no
+   * confirmation.
+   */
+  function setTodos(deckId, todos) {
+    const session = sessions.get(deckId)
+    if (!session) return { ok: false, error: 'unknown session' }
+
+    session.todos = cleanTodos(todos)
+    publish(session)
+    return { ok: true, todos: session.todos }
   }
 
   /**
@@ -884,6 +1265,17 @@ export function createAgentManager({ start = query } = {}) {
    * the CLI you are running instead of one that was true when this file was
    * written. A hand-kept list of model names is wrong the day a model ships.
    */
+  function shapeModels(list) {
+    return (list || []).map((m) => ({
+      value: m.value,
+      resolvedModel: m.resolvedModel || null,
+      displayName: m.displayName || m.value,
+      description: m.description || '',
+      supportsEffort: m.supportsEffort !== false && Boolean(m.supportedEffortLevels?.length),
+      effortLevels: m.supportedEffortLevels || [],
+    }))
+  }
+
   async function models(deckId) {
     const session = sessions.get(deckId)
     if (!session) return { ok: false, error: 'unknown session' }
@@ -891,20 +1283,71 @@ export function createAgentManager({ start = query } = {}) {
 
     try {
       const list = await withTimeout(session.query.supportedModels(), 5000)
-      return {
-        ok: true,
-        models: (list || []).map((m) => ({
-          value: m.value,
-          resolvedModel: m.resolvedModel || null,
-          displayName: m.displayName || m.value,
-          description: m.description || '',
-          supportsEffort: m.supportsEffort !== false && Boolean(m.supportedEffortLevels?.length),
-          effortLevels: m.supportedEffortLevels || [],
-        })),
-      }
+      return { ok: true, models: shapeModels(list) }
     } catch (err) {
       return { ok: false, error: err?.message || 'Could not read the model list' }
     }
+  }
+
+  /**
+   * The same list, for a session that does not exist yet.
+   *
+   * The launcher needs it before there is anything to ask, and the answer is
+   * not ours to invent: which models an account can reach depends on what it
+   * has access to and on what the organisation allows, and it is not the same
+   * on two machines. Writing the list down here would be the hand-kept list
+   * the comment above already refuses — and it would be wrong in a way nobody
+   * could see, because a model missing from a menu looks exactly like a model
+   * that does not exist.
+   *
+   * So a process is started with an input stream that never emits: the CLI
+   * comes up, answers the question, and is closed. It sends no turn, so it
+   * costs no tokens — only the second or so it takes to start.
+   *
+   * Asked per folder because an organisation's allowlist can be set per
+   * project, and cached for the life of the deck because the answer changes
+   * when the CLI is upgraded, not while you are looking at it.
+   */
+  const catalogues = new Map()
+
+  async function catalogue(cwd) {
+    const key = cwd || '.'
+    if (catalogues.has(key)) return catalogues.get(key)
+
+    const pending = (async () => {
+      let q = null
+      try {
+        q = start({
+          prompt: (async function* () { await new Promise(() => {}) })(),
+          options: { cwd: key, settingSources: ['user', 'project', 'local'] },
+        })
+        const list = await withTimeout(q.supportedModels(), 10_000)
+        /*
+         * A timeout resolves undefined rather than throwing, and an empty list
+         * would be cached as "this machine has no models" — which is a claim,
+         * not an absence. Better to have asked and failed, and ask again next
+         * time somebody opens the launcher.
+         */
+        if (!list || list.length === 0) {
+          catalogues.delete(key)
+          return { ok: false, error: 'Could not read the model list' }
+        }
+        return { ok: true, models: shapeModels(list) }
+      } catch (err) {
+        catalogues.delete(key)
+        return { ok: false, error: err?.message || 'Could not read the model list' }
+      } finally {
+        /*
+         * Closed either way, and on a clock: a process holding an input stream
+         * nobody is ever going to write to would sit there for the life of the
+         * deck. Same call and same grace period the kill path uses.
+         */
+        try { await withTimeout(q?.return?.(undefined), 5000) } catch { /* already gone */ }
+      }
+    })()
+
+    catalogues.set(key, pending)
+    return pending
   }
 
   /**
@@ -960,13 +1403,55 @@ export function createAgentManager({ start = query } = {}) {
     if (!session.query) return { ok: false, error: 'this session is not running' }
 
     try {
-      await session.query.applyFlagSettings({ effortLevel: level || null })
+      /*
+       * The `ultracode` key is carried along deliberately. An `effortLevel`
+       * sent on its own does not only change the effort — it also switches
+       * ultracode off, and the deck has no control that would let you put it
+       * back. Moving a slider in a header must not quietly take a mode away
+       * from the session, so when ultracode is on it is re-sent with the new
+       * level. Only when it is on: sending `false` would write the flag layer,
+       * which outranks the settings file that said so, and the deck would then
+       * be holding it off rather than leaving it alone.
+       */
+      const ultracode = await ultracodeOn(session)
+      await session.query.applyFlagSettings({
+        effortLevel: level || null,
+        ...(ultracode ? { ultracode: true } : {}),
+      })
       session.requestedEffort = level || null
       publish(session)
       return { ok: true, effort: level || null }
     } catch (err) {
       return { ok: false, error: err?.message || 'Could not change the effort' }
     }
+  }
+
+  /**
+   * Is ultracode on for this session?
+   *
+   * Nothing on the wire says so: neither the init message nor a result
+   * reports it, so the only honest answer comes from the settings cascade the
+   * session was started against. The deck never writes the key itself, which
+   * is what makes that reading current rather than merely initial.
+   *
+   * Cached per session because the read touches disk — and, the first time in
+   * a process, possibly an MDM lookup — while the answer cannot change under
+   * us for as long as the deck is the only one setting flag settings.
+   *
+   * A failure here answers `false`. That restores exactly the behaviour this
+   * had before the key existed, which is the right thing to fall back to: an
+   * effort change that works and may drop ultracode beats an effort change
+   * that refuses because it could not read a settings file.
+   */
+  async function ultracodeOn(session) {
+    if (session.ultracode !== undefined) return session.ultracode
+    try {
+      const resolved = await withTimeout(readSettings({ cwd: session.cwd }), 2000)
+      session.ultracode = Boolean(resolved?.effective?.ultracode)
+    } catch {
+      session.ultracode = false
+    }
+    return session.ultracode
   }
 
   /**
@@ -1201,8 +1686,12 @@ export function createAgentManager({ start = query } = {}) {
 
   /** Drain the SDK message stream, tracking status and the session id. */
   async function consume(session, q) {
+    // A new process starts with nothing running, whatever the last one left.
+    session.live.clear()
     try {
       for await (const msg of q) {
+        const live = session.live.apply(msg)
+        if (live) publishLive(session, live)
         if (msg.type === 'system' && msg.subtype === 'init') {
           session.sessionId = msg.session_id
 
@@ -1215,7 +1704,10 @@ export function createAgentManager({ start = query } = {}) {
             session.permissionMode = granted
             session.modeNote =
               `Asked for "${session.requestedMode}", but this environment only allowed ` +
-              `"${granted}". Permissions are still being enforced.`
+              `"${granted}". Permissions are still being enforced.` +
+              (granted === 'default' && session.requestedMode === 'bypassPermissions'
+                ? ' "Auto" is the mode that still runs routine commands without asking.'
+                : '')
           } else if (granted) {
             session.permissionMode = granted
           }
@@ -1269,6 +1761,9 @@ export function createAgentManager({ start = query } = {}) {
         setStatus(session, 'error')
       }
     } finally {
+      clearTimeout(session.liveTimer)
+      session.liveTimer = null
+      if (session.live.clear()) publish(session)
       if (session.pending.size) {
         for (const [id, pending] of session.pending) {
           session.pending.delete(id)
@@ -1303,8 +1798,8 @@ export function createAgentManager({ start = query } = {}) {
   }
 
   return {
-    emitter, launch, adopt, rename, respond, answerQuestion, say, setMode,
+    emitter, launch, launchTeam, adopt, rename, respond, answerQuestion, say, setMode, setTodos,
     interrupt, stop, stopAll, suspend, suspendAll, busyCount, list, bySessionId,
-    contextUsage, models, setModel, setEffort, wake,
+    contextUsage, models, catalogue, setModel, setEffort, wake, wakeMany,
   }
 }

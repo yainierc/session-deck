@@ -5,11 +5,24 @@
  * default are deliberately investigative: they read and report, they do not
  * change code. Anything that edits should be something you wrote yourself and
  * meant to run.
+ *
+ * A preset also carries how the session should think: which model, how much
+ * effort, and whether a stronger model is consulted at the hard moments. Those
+ * are part of the task and not of the session — "review my changes" wants care
+ * and "catch me up" does not, whatever you happened to leave the panel set to
+ * last night.
+ *
+ * What a preset deliberately does NOT carry is the permission mode. The three
+ * paths that launch from something stored — a roadmap, a report, a milestone —
+ * all take the mode from settings on purpose, because a stored plan must never
+ * be the way privilege gets widened. This file is edited by hand more easily
+ * than any of them, so the same rule holds here, and more so.
  */
 import fs from 'node:fs'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { deckDir } from './platform.js'
+import { cleanModel, cleanEffort } from './choices.js'
 
 const DEFAULTS = [
   {
@@ -41,15 +54,38 @@ function file() {
   return path.join(deckDir(), 'presets.json')
 }
 
+/**
+ * One stored record, reduced to what this file is willing to vouch for.
+ *
+ * The file is plain JSON in a directory you can open, so what comes out of it
+ * is treated as somebody's typing and not as the panel's own state. An
+ * unrecognised model or effort becomes the default rather than an error: the
+ * shortcut still works, it just stops claiming something the CLI would refuse.
+ */
+function clean(record) {
+  if (!record || typeof record !== 'object') return null
+  const label = String(record.label || '').trim()
+  const prompt = String(record.prompt || '').trim()
+  if (!label || !prompt) return null
+  return {
+    id: String(record.id || randomUUID().slice(0, 8)),
+    label,
+    prompt,
+    model: cleanModel(record.model),
+    effort: cleanEffort(record.effort),
+    advisor: record.advisor === true,
+  }
+}
+
 function read() {
   try {
     const data = JSON.parse(fs.readFileSync(file(), 'utf8'))
-    if (Array.isArray(data.presets)) return data.presets
+    if (Array.isArray(data.presets)) return data.presets.map(clean).filter(Boolean)
   } catch {
     // No file yet: start from the defaults rather than an empty list, so the
     // feature is useful before you have configured anything.
   }
-  return DEFAULTS
+  return DEFAULTS.map(clean)
 }
 
 function write(presets) {
@@ -66,7 +102,7 @@ export function list() {
   return read()
 }
 
-export function add({ label, prompt }) {
+export function add({ label, prompt, model, effort, advisor }) {
   const cleanLabel = String(label || '').trim()
   const cleanPrompt = String(prompt || '').trim()
   if (!cleanLabel) return { ok: false, error: 'A name is required' }
@@ -78,7 +114,12 @@ export function add({ label, prompt }) {
     return { ok: false, error: 'You already have a shortcut with that name' }
   }
 
-  const preset = { id: randomUUID().slice(0, 8), label: cleanLabel, prompt: cleanPrompt }
+  /*
+   * Built through the same cleaner the file is read with, so a shortcut saved
+   * from the panel and one typed into the file by hand cannot end up different
+   * shapes. It cannot return null here — label and prompt are checked above.
+   */
+  const preset = clean({ id: randomUUID().slice(0, 8), label: cleanLabel, prompt: cleanPrompt, model, effort, advisor })
   if (!write([...presets, preset])) return { ok: false, error: 'Could not save' }
   return { ok: true, preset }
 }
@@ -91,8 +132,18 @@ export function remove(id) {
   return { ok: true }
 }
 
-/** Put the shipped defaults back, for when you have deleted your way into a corner. */
+/**
+ * Put the shipped defaults back, for when you have deleted your way into a
+ * corner.
+ *
+ * The shipped three carry no model, no effort and no advisor on purpose. They
+ * are what somebody sees before they have configured anything, and a default
+ * that quietly spends more than the panel's own default model would is a bill
+ * nobody asked for — the advisor especially, which reads the whole
+ * conversation every time it is called.
+ */
 export function reset() {
-  if (!write(DEFAULTS)) return { ok: false, error: 'Could not save' }
-  return { ok: true, presets: DEFAULTS }
+  const defaults = DEFAULTS.map(clean)
+  if (!write(defaults)) return { ok: false, error: 'Could not save' }
+  return { ok: true, presets: defaults }
 }

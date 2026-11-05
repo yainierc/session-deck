@@ -95,6 +95,8 @@ export function joinSubagents(agentIds, metaFor, runningToolUseIds = []) {
       type: meta?.type || null,
       description: meta?.description || '',
       depth: meta?.depth ?? null,
+      // What the live count in the header knows an agent by.
+      toolUseId: meta?.toolUseId || null,
       running: Boolean(meta?.toolUseId && running.has(meta.toolUseId)),
     }
   })

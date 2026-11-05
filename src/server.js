@@ -15,16 +15,14 @@ import { createSessionStore } from './session-store.js'
 import { resolveProjectRoot, subpathWithin, listWorktrees, rootBranch } from './projects.js'
 import * as workspace from './workspace.js'
 import { browse } from './browse.js'
-import { activityFor } from './atlas.js'
+import * as files from './files.js'
 import { meetingsFor } from './meeting.js'
 import { resolvePeers, heldPeers } from './roster.js'
-import { dossierFor, promptFor, reportPath, summaryOf } from './report.js'
 import * as presets from './presets.js'
-import * as roadmap from './roadmap.js'
-import * as proposal from './proposal.js'
-import {
-  startMilestone, runMilestone, cleanupPlan, completeRoadmap, takenNames, startedButGone,
-} from './roadmap-runner.js'
+import * as teams from './teams.js'
+import * as plans from './plans.js'
+import * as roles from './roles.js'
+import * as teamproposal from './teamproposal.js'
 import * as settings from './settings.js'
 import * as permissions from './permissions.js'
 import { statusFor, removeWorktree } from './worktree-status.js'
@@ -35,6 +33,7 @@ import { listMcpServers, findMcpServer } from './mcp.js'
 import { branchesFor, pull } from './pull.js'
 import * as auth from './auth.js'
 import * as handoff from './handoff.js'
+import * as handoffNotes from './handoff-notes.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const DIST = path.resolve(__dirname, '..', 'dist')
@@ -144,6 +143,17 @@ function readBody(req, limit = 8192) {
   })
 }
 
+/**
+ * A built asset: `index-B2qAKNIs.js`, `index-Bb6nx77L.css`.
+ *
+ * The hash is of the contents, so the name changing *is* the file changing.
+ * That is what makes it safe to keep one for a year and what makes it unsafe
+ * to keep anything else for a second.
+ */
+const ASSET_NAME = /-[A-Za-z0-9_-]{8,}\.[a-z0-9]+$/
+const FOREVER = 'public, max-age=31536000, immutable'
+const NO_CACHE = 'no-cache'
+
 function serveStatic(req, res) {
   const url = new URL(req.url, 'http://localhost')
   let rel = decodeURIComponent(url.pathname)
@@ -158,21 +168,46 @@ function serveStatic(req, res) {
     return
   }
 
+  const ext = path.extname(target)
+
   fs.readFile(target, (err, data) => {
     if (err) {
-      // SPA: any unknown route falls back to the index.
+      /*
+       * A missing asset is a 404 and never the index.
+       *
+       * The fallback below exists for routes — /settings typed into the bar —
+       * and handing HTML back for a missing `.js` turns the most common
+       * failure after an update into the most confusing one: the browser gets
+       * a 200, tries to run a page as a module, and the app simply does not
+       * boot. Nothing on screen says why, and reloading does it again.
+       */
+      if (ext && ext !== '.html') {
+        res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' }).end('Not found')
+        return
+      }
+
       fs.readFile(path.join(DIST, 'index.html'), (err2, html) => {
         if (err2) {
           res.writeHead(503, { 'content-type': 'text/plain; charset=utf-8' })
           res.end('The UI has not been built yet.\n\nRun:  npm install && npm run build\n')
           return
         }
-        res.writeHead(200, { 'content-type': MIME['.html'] }).end(html)
+        res.writeHead(200, { 'content-type': MIME['.html'], 'cache-control': NO_CACHE }).end(html)
       })
       return
     }
-    const type = MIME[path.extname(target)] || 'application/octet-stream'
-    res.writeHead(200, { 'content-type': type }).end(data)
+    const type = MIME[ext] || 'application/octet-stream'
+    /*
+     * The build gives every asset a name containing a hash of its contents, so
+     * a file that changed arrives under a new name and one that did not can be
+     * kept for ever. `index.html` is the exception and the important one: it
+     * is the only file whose name stays the same, it is what names the others,
+     * and a stale copy of it asks for a bundle that no longer exists. Caching
+     * it is how an update becomes invisible until somebody clears a cache they
+     * have no reason to suspect.
+     */
+    const cache = ASSET_NAME.test(path.basename(target)) ? FOREVER : NO_CACHE
+    res.writeHead(200, { 'content-type': type, 'cache-control': cache }).end(data)
   })
 }
 
@@ -306,8 +341,15 @@ export function createServer({ notifications = true, publicUrl = null } = {}) {
       name: record.title,
       permissionMode: record.permissionMode,
       model: record.model,
+      effort: record.effort,
+      advisor: record.advisor,
+      delegates: record.delegates,
       deckId: record.deckId,
       startedAt: record.startedAt,
+      // What it had got through before the restart. The session will not
+      // re-send its plan unprompted, so this file is the only way the strip
+      // comes back filled in.
+      todos: record.todos,
     })
   }
 
@@ -386,6 +428,13 @@ export function createServer({ notifications = true, publicUrl = null } = {}) {
         requestedModel: m.requestedModel,
         effort: m.effort,
         requestedEffort: m.requestedEffort,
+        requestedAdvisor: m.requestedAdvisor,
+        delegates: m.delegates,
+        // Only a managed session has one: the tool that writes it is passed
+        // at spawn, and a session running in a terminal was never given it.
+        todos: m.todos,
+        // The subagents it has running, straight off its stream.
+        agents: m.agents,
         waitingFor: m.pending ? m.pending.title : s.waitingFor,
       }
     })
@@ -423,6 +472,9 @@ export function createServer({ notifications = true, publicUrl = null } = {}) {
         requestedModel: m.requestedModel,
         effort: m.effort,
         requestedEffort: m.requestedEffort,
+        requestedAdvisor: m.requestedAdvisor,
+        delegates: m.delegates,
+        agents: m.agents,
         managed: true,
         startedAt: m.startedAt,
         updatedAt: Date.now(),
@@ -436,8 +488,8 @@ export function createServer({ notifications = true, publicUrl = null } = {}) {
      * A session running in a folder you never added is somebody else's
      * business — opened from a terminal in a repo you are not tracking here.
      * It is dropped before anything downstream sees it, so the sidebar, the
-     * inbox, the atlas and the notifier all agree on one list rather than
-     * each filtering it differently.
+     * inbox, the teams screen and the notifier all agree on one list rather
+     * than each filtering it differently.
      *
      * A session the deck launched is kept whatever folder it is in: we
      * started it and we own its permission prompts, and a prompt with
@@ -454,7 +506,23 @@ export function createServer({ notifications = true, publicUrl = null } = {}) {
      */
     const tracked = stableOrder(sessions.filter((s) => s.managed || roots.has(s.projectPath)))
 
-    return { sessions: tracked, projects: mergeWorkspace(tracked, folders) }
+    /*
+     * A session says which project it belongs to, and that has to be the name
+     * you gave the project rather than the folder's.
+     *
+     * Relabelled here, once, instead of inside the two places that build a
+     * session: this is where the workspace has already been read, so it costs
+     * nothing, and it means the toast, the inbox row, the launcher's grouping
+     * and the sidebar heading are all fed the same string by construction.
+     * A session in a folder that is not in the workspace keeps its basename —
+     * there is no label to find for it.
+     */
+    const labelled = tracked.map((s) => {
+      const named = folders.find((f) => f.path === s.projectPath)
+      return named && named.name !== s.project ? { ...s, project: named.name } : s
+    })
+
+    return { sessions: labelled, projects: mergeWorkspace(labelled, folders) }
   }
 
   /**
@@ -506,83 +574,6 @@ export function createServer({ notifications = true, publicUrl = null } = {}) {
     return projects
   }
 
-  /**
-   * The roadmap, with the branch each unstarted milestone would create.
-   *
-   * One git call for the whole roadmap rather than one per milestone: the
-   * question "which names are taken" has a single answer per project.
-   */
-  /** Is this launched session still around? */
-  function liveDeck(deckId) {
-    return agents.list().some((s) => s.deckId === deckId && s.status !== 'done')
-  }
-
-  async function withPlannedNames(plan, projectPath) {
-    if (!plan?.milestones?.length) return plan
-    const taken = await takenNames(projectPath)
-    const running = new Map(agents.list().map((s) => [s.deckId, s]))
-
-    const milestones = plan.milestones.map((m) => {
-      const live = m.deckId ? running.get(m.deckId) : null
-
-      /*
-       * A session does not have a Claude session id at the moment it is
-       * launched — it registers itself a beat later — so the roadmap learns
-       * it here, the first time it can. Without this, restarting the deck
-       * would leave a finished milestone with no way back to its transcript,
-       * because the deck id it recorded died with the process table.
-       */
-      if (live?.sessionId && !m.sessionId) {
-        const healed = roadmap.attachSession(projectPath, plan.id, m.id, { sessionId: live.sessionId })
-        if (healed.ok) m = { ...m, sessionId: live.sessionId }
-      }
-
-      return {
-        ...m,
-        planned: roadmap.plannedNames(m, taken),
-        // Checked against the disk on every read, so a worktree deleted
-        // behind the deck's back shows as gone rather than as work in hand.
-        gone: startedButGone(m),
-        // The same rule for its session: what is running decides, not what
-        // the roadmap remembers about it.
-        session: m.deckId
-          ? {
-              deckId: m.deckId,
-              sessionId: m.sessionId || live?.sessionId || null,
-              live: Boolean(live),
-              // Translated into the vocabulary the rest of the panel speaks.
-              // The manager says 'working'; every status the browser already
-              // branches on says 'busy', and one of the two spellings being
-              // wrong is the kind of mismatch that fails silently.
-              status: live ? MANAGED_TO_PANEL[live.status] || live.status : null,
-            }
-          : null,
-      }
-    })
-
-    return { ...plan, milestones }
-  }
-
-  /**
-   * One POST, one action. The roadmap is a small enough object that sending
-   * the whole thing back would be simpler — and wrong: two browsers open on
-   * the same project would take turns overwriting each other's edits.
-   */
-  function applyRoadmap(projectPath, which, { action, id, ...rest }) {
-    switch (action) {
-      case 'new': return roadmap.create(projectPath, { goal: rest.goal })
-      case 'reopen': return roadmap.reopen(projectPath, which)
-      case 'discard': return roadmap.remove(projectPath, which)
-      case 'add': return roadmap.add(projectPath, which, rest)
-      case 'update': return roadmap.update(projectPath, which, id, rest)
-      case 'remove': return roadmap.removeMilestone(projectPath, which, id)
-      case 'move': return roadmap.move(projectPath, which, id, rest.by)
-      case 'goal': return roadmap.setGoal(projectPath, which, rest.goal)
-      case 'landing': return roadmap.setLanding(projectPath, which, rest.landing)
-      default: return { ok: false, error: 'Unknown action' }
-    }
-  }
-
   /** Everything the project view needs: worktrees, sessions, subagents. */
   function projectDetail(projectPath, sessions) {
     const mine = sessions.filter((s) => s.projectPath === projectPath)
@@ -612,7 +603,9 @@ export function createServer({ notifications = true, publicUrl = null } = {}) {
 
     return {
       path: projectPath,
-      name: projectPath.split(/[/\\]/).filter(Boolean).pop() || projectPath,
+      // The name you gave it if you gave it one, so the page's heading and the
+      // sidebar row you clicked to get here cannot disagree.
+      name: workspace.nameFor(projectPath) || projectPath,
       branch: rootBranch(projectPath),
       worktrees,
       subagents,
@@ -716,11 +709,17 @@ export function createServer({ notifications = true, publicUrl = null } = {}) {
       if (req.method === 'GET') return sendJson(res, 200, { folders: workspace.list() })
 
       /*
-       * PATCH is the order, and it is a separate verb rather than a flag on
-       * POST because it is a different act: POST brings a folder into the
-       * workspace, PATCH only rearranges the ones already in it. Every one
-       * of them ends in the same broadcast, so a reorder done on your phone
-       * redraws the menu on the desktop without either side asking.
+       * PATCH is everything about a folder already in the workspace — its
+       * place in the order and the name you gave it — and it is a separate
+       * verb rather than a flag on POST because it is a different act: POST
+       * brings a folder in, PATCH edits one that is already there. Every one
+       * of them ends in the same broadcast, so a reorder or a rename done on
+       * your phone redraws the menu on the desktop without either side asking.
+       *
+       * The two PATCHes are told apart by which field arrived, not by a mode
+       * string: a body with a direction is a move, a body carrying a name is a
+       * rename. An empty name is a real request — it is how a label is
+       * cleared — so presence of the key is what counts, never its truthiness.
        */
       if (req.method === 'POST' || req.method === 'DELETE' || req.method === 'PATCH') {
         readBody(req).then((payload) => {
@@ -728,27 +727,13 @@ export function createServer({ notifications = true, publicUrl = null } = {}) {
           let result
           if (req.method === 'POST') result = workspace.add(payload.path)
           else if (req.method === 'DELETE') result = workspace.remove(payload.path)
+          else if ('name' in payload) result = workspace.rename(payload.path, payload.name)
           else result = workspace.move(payload.path, payload.direction)
           if (result.ok) broadcastState()
           sendJson(res, result.ok ? 200 : 400, result)
         })
         return
       }
-    }
-
-    /**
-     * File activity across every live session, for the deck-wide map.
-     *
-     * On demand rather than on the tick: this is one screen of several, and
-     * pushing file events to every client whether or not anyone is watching
-     * would be paying for it all the time. Reads are incremental, so polling
-     * a quiet session costs a stat() call.
-     */
-    if (url.pathname === '/api/activity') {
-      const index = indexTranscripts()
-      return sendJson(res, 200, {
-        sessions: activityFor(snapshot().sessions, (id) => findTranscript(id, index)),
-      })
     }
 
     /**
@@ -900,16 +885,154 @@ export function createServer({ notifications = true, publicUrl = null } = {}) {
       return
     }
 
+    /**
+     * What every project is trying to build, in whatever it writes it down in.
+     *
+     * Read per project and never cached: these are a few dozen small files and
+     * the whole value of the screen is that it is true right now. The old
+     * roadmap was a cache of the plan and that is precisely what killed it —
+     * a board that lags the repository teaches you to stop believing it.
+     *
+     * Read-only, by construction. Nothing on this route writes to a
+     * repository, and the detection result carries whether writing would even
+     * be allowed, so the screen can say which projects the deck would be
+     * willing to touch before anything can be asked of it.
+     */
+    if (url.pathname === '/api/plans') {
+      const roots = [...new Set(snapshot().projects.map((p) => p.path).filter(Boolean))]
+      const only = url.searchParams.get('root')
+
+      try {
+        const projects = (only ? roots.filter((r) => r === only) : roots).map((root) => {
+          try {
+            /*
+             * The worktrees too, because a plan written on a branch is still a
+             * plan of this project — and the main checkout is often parked
+             * somewhere that has none of them.
+             */
+            return plans.readAll(root, listWorktrees(root).filter((w) => w.exists).map((w) => w.path))
+          } catch (err) {
+            /*
+             * One unreadable repository must not take the screen with it.
+             * These readers walk files written by other tools and by people,
+             * and the honest failure is "this project could not be read",
+             * next to the ten that could.
+             */
+            return {
+              root,
+              name: root.split('/').filter(Boolean).pop() || root,
+              method: 'error',
+              label: 'could not be read',
+              supported: false,
+              plans: [],
+              drift: [],
+              unreadable: [],
+              error: err?.message || 'unreadable',
+            }
+          }
+        })
+        return sendJson(res, 200, { projects })
+      } catch (err) {
+        return sendJson(res, 500, { error: err.message })
+      }
+    }
+
+    /**
+     * The Files tab: one folder of a project, a name search across it, or
+     * just what changed — and, at /api/file, one file read back as text.
+     *
+     * Only for a folder that is already a project in the deck. Unlike
+     * /api/browse this answers a paired phone too, because that is what
+     * pairing is for and the transcripts it already reads are full of these
+     * same files; what keeps it from being a window onto the whole disk is
+     * that `root` has to be one the deck knows, and files.js fences every
+     * path inside it.
+     */
+    if (url.pathname === '/api/files' || url.pathname === '/api/file') {
+      const root = url.searchParams.get('root')
+      const known = snapshot().projects.some((p) => p.path && p.path === root)
+      if (!root || !known) return sendJson(res, 404, { ok: false, error: 'That folder is not a project in the deck' })
+      const showHidden = url.searchParams.get('hidden') === '1'
+      const rel = url.searchParams.get('path') || ''
+
+      const answer = url.pathname === '/api/file'
+        ? files.readFile(root, rel)
+        : url.searchParams.has('find')
+          ? files.findFiles(root, url.searchParams.get('find'), { showHidden })
+          : url.searchParams.get('changed') === '1'
+            ? files.changedFiles(root)
+            : files.listDir(root, rel, { showHidden })
+      return answer
+        .then((body) => sendJson(res, 200, body))
+        .catch((err) => sendJson(res, 500, { ok: false, error: err?.message || 'Could not read the project' }))
+    }
+
+    /**
+     * The handoff notes of the project this folder belongs to — its main
+     * checkout and every worktree — so a new session can start from one.
+     *
+     * Asked by folder rather than by project, because the launcher only ever
+     * knows the folder you clicked, and that may be a worktree.
+     */
+    if (url.pathname === '/api/handoffs' && req.method === 'GET') {
+      const cwd = url.searchParams.get('cwd')
+      if (!cwd) return sendJson(res, 400, { error: 'cwd is required' })
+      const root = resolveProjectRoot(cwd).root || cwd
+      const worktrees = listWorktrees(root).filter((w) => w.exists)
+      const checkouts = [root, ...worktrees.map((w) => w.path)]
+
+      const notes = handoffNotes.list(checkouts).map((note) => {
+        const worktree = worktrees.find((w) => w.path === note.checkout)
+        return {
+          ...note,
+          worktree: worktree ? worktree.name : null,
+          // What the checkout has out now, when the note did not say.
+          branch: note.branch || (worktree ? worktree.branch : rootBranch(root)),
+        }
+      })
+
+      /*
+       * A pending note whose worktree is already merged is probably stale:
+       * the work it describes has landed. Said, not hidden — the note may
+       * still carry the follow-ups. Only the pending ones are asked about,
+       * so opening the launcher costs a handful of cached git calls.
+       */
+      Promise.all(notes.map(async (note) => {
+        if (note.state !== 'pending' || !note.worktree) return { ...note, merged: false }
+        const status = await statusFor(root, note.checkout).catch(() => null)
+        return { ...note, merged: Boolean(status?.available && status.finished) }
+      }))
+        .then((handoffs) => sendJson(res, 200, { root, handoffs }))
+        .catch((err) => sendJson(res, 500, { error: err.message }))
+      return
+    }
+
+    if (url.pathname === '/api/handoffs/picked' && req.method === 'POST') {
+      readBody(req).then((payload) => {
+        const ok = handoffNotes.markPickedUp(payload?.file)
+        sendJson(res, ok ? 200 : 400, ok ? { ok } : { ok, error: 'Not a handoff note' })
+      })
+      return
+    }
+
+
     if (url.pathname === '/api/login' && req.method === 'POST') {
       if (!isLocalRequest(req)) {
-        return sendJson(res, 403, { error: 'Signing in is only possible from the machine running the deck' })
+        return sendJson(res, 403, { error: 'Signing in and out is only possible from the machine running the deck' })
       }
       readBody(req).then(async (payload) => {
         const roots = [...new Set(snapshot().projects.map((p) => p.path).filter(Boolean))]
 
         let command = null
         if (payload?.target === 'github') command = 'gh auth login'
-        else if (payload?.target === 'claude') command = 'claude auth login'
+        // Signing out travels this route rather than one of its own: the
+        // property that makes this endpoint safe is that the command is chosen
+        // here from a fixed set, and a second endpoint would have to copy it
+        // along with the local-only guard. `action` picks between two constants
+        // and is never interpolated.
+        else if (payload?.target === 'claude') {
+          command = payload.action === 'logout' ? 'claude auth logout' : 'claude auth login'
+        }
         else if (payload?.target === 'azure') command = 'az login'
         else if (payload?.target === 'ado') {
           const match = (await adoOrgsFor(roots)).find((o) => o.org === payload.org)
@@ -924,12 +1047,14 @@ export function createServer({ notifications = true, publicUrl = null } = {}) {
 
         if (!command) return sendJson(res, 400, { error: 'Nothing to sign in to' })
 
-        // Only the signed-in answer is cached, so this is not about the logged
-        // out case — that is never held. It is about switching accounts: the
-        // deck is signed in as one identity, you are being sent off to become
-        // another, and the ten minutes of "you are still the old one" start
-        // now. It also bumps a generation, so a lookup already in flight
-        // cannot land afterwards and restore what it read before the handoff.
+        // Only the signed-in answer is cached, so this never matters for
+        // arriving at a login — that state is never held. It matters for
+        // leaving one: signing out and switching accounts both start ten
+        // minutes of "you are still the old one" over an identity that no
+        // longer exists, and a logout the panel keeps showing as signed in is
+        // the one way this row can lie outright. It also bumps a generation,
+        // so a lookup already in flight cannot land afterwards and restore
+        // what it read before the handoff.
         if (payload?.target === 'claude') forgetClaudeIdentity()
 
         // The command travels back either way: when the terminal could not be
@@ -960,10 +1085,25 @@ export function createServer({ notifications = true, publicUrl = null } = {}) {
           const busy = live.filter((session) => isInside(session.cwd, worktree.path))
           if (busy.length && status.available) {
             status.safeToDelete = false
-            status.blockers = [
+            status.finished = false
+            status.state = 'protected'
+            status.atRisk = [
               `${busy.length} session${busy.length === 1 ? '' : 's'} running here`,
-              ...status.blockers,
+              ...(status.atRisk || []),
             ]
+            status.blockers = status.atRisk
+          }
+
+          // An untracked note already makes the worktree dirty, so it is
+          // protected either way. This says which of the uncommitted changes
+          // is the one you would miss.
+          const waiting = handoffNotes.list([worktree.path]).filter((n) => n.state === 'pending')
+          if (waiting.length && status.available) {
+            status.atRisk = [
+              `${waiting.length} handoff ${waiting.length === 1 ? 'note' : 'notes'} not picked up yet`,
+              ...(status.atRisk || []),
+            ]
+            status.blockers = status.atRisk
           }
           return { ...worktree, status }
         }),
@@ -1001,9 +1141,56 @@ export function createServer({ notifications = true, publicUrl = null } = {}) {
           })
         }
 
-        const result = await removeWorktree(payload.root, target.path)
+        const result = await removeWorktree(payload.root, target.path, {
+          // Only ever the branch this worktree actually had checked out, read
+          // from git a line ago — never a name the browser chose.
+          deleteBranch: payload.deleteBranch ? status.branch : null,
+        })
         if (result.ok) broadcastState()
         sendJson(res, result.ok ? 200 : 400, result)
+      })
+      return
+    }
+
+    /**
+     * Clear out every worktree whose work has landed, in one go.
+     *
+     * One button and not forty, because forty worktrees is where this
+     * screen stops being used at all — and because they are all the same
+     * decision, taken for the same reason.
+     *
+     * Each one is re-checked here rather than trusted from the list the
+     * browser was showing: that list may be minutes old, and a session may
+     * have started in one of them since. Nothing is forced, and anything
+     * that fails is reported by name instead of stopping the rest.
+     */
+    if (url.pathname === '/api/worktrees/tidy' && req.method === 'POST') {
+      readBody(req).then(async (payload) => {
+        if (!payload?.root) return sendJson(res, 400, { ok: false, error: 'root is required' })
+
+        const known = listWorktrees(payload.root)
+        const live = snapshot().sessions
+        const removed = []
+        const skipped = []
+
+        for (const worktree of known) {
+          if (!worktree.exists || worktree.main) continue
+          if (live.some((session) => isInside(session.cwd, worktree.path))) {
+            skipped.push({ name: worktree.name, why: 'a session is running here' })
+            continue
+          }
+          const status = await statusFor(payload.root, worktree.path, { refresh: true })
+          if (!status.available || !status.finished || !status.safeToDelete) continue
+
+          const result = await removeWorktree(payload.root, worktree.path, {
+            deleteBranch: payload.deleteBranches ? status.branch : null,
+          })
+          if (result.ok) removed.push({ name: worktree.name, branch: status.branch, branchDeleted: result.branchDeleted })
+          else skipped.push({ name: worktree.name, why: result.error })
+        }
+
+        if (removed.length) broadcastState()
+        sendJson(res, 200, { ok: true, removed, skipped })
       })
       return
     }
@@ -1115,6 +1302,144 @@ export function createServer({ notifications = true, publicUrl = null } = {}) {
       }
     }
 
+    /*
+     * The models a launch may ask for, before there is a session to ask.
+     *
+     * Answered per folder, because an organisation's allowlist can be set per
+     * project, and by the agent manager rather than from a list written down
+     * here — which models an account can reach depends on what it has access
+     * to, and a model missing from a menu looks exactly like a model that does
+     * not exist.
+     */
+    if (url.pathname === '/api/models' && req.method === 'GET') {
+      const cwd = url.searchParams.get('cwd')
+      agents
+        .catalogue(cwd || process.cwd())
+        .then((result) => sendJson(res, 200, result))
+        .catch((err) => sendJson(res, 200, { ok: false, error: err?.message || 'Could not read the model list' }))
+      return
+    }
+
+    /*
+     * The teams, each member matched to the session it is now. Matched here
+     * rather than in the browser because the matching needs the snapshot, and
+     * the snapshot is already built on this side of the wire.
+     */
+    if (url.pathname === '/api/teams') {
+      if (req.method === 'GET') {
+        return sendJson(res, 200, {
+          teams: teams.withSessions(snapshot().sessions),
+          /*
+           * The put-away ones travel with them, plain. They are small, there
+           * are at most twenty, and the screen cannot offer one back if it
+           * does not know it is there.
+           */
+          dismissed: teams.dismissed(),
+        })
+      }
+      if (req.method === 'DELETE') {
+        readBody(req).then((payload) => {
+          const result = teams.forget(payload?.id)
+          sendJson(res, result.ok ? 200 : 400, result)
+        }).catch(() => sendJson(res, 400, { ok: false, error: 'bad request' }))
+        return
+      }
+      // Putting one back. A POST and not an undo-the-DELETE, because it can be
+      // asked for an hour later from a page that never saw the DELETE.
+      if (req.method === 'POST') {
+        readBody(req).then((payload) => {
+          const result = teams.restore(payload?.id)
+          sendJson(res, result.ok ? 200 : 400, result)
+        }).catch(() => sendJson(res, 400, { ok: false, error: 'bad request' }))
+        return
+      }
+    }
+
+    /*
+     * The roles a team can be staffed with — a standing brief, not a task with
+     * an end. The launcher's shortcuts live next door and are the other thing:
+     * one errand, done when it is done.
+     */
+    /*
+     * A team proposed by a session that did the work.
+     *
+     * Unlike the roadmap draft, which launches a session to read a document,
+     * this one talks to a session that already exists — the whole point is the
+     * context it is holding. So it is a message into that conversation, not a
+     * new one, and the deck records the request before the answer can arrive.
+     */
+    if (url.pathname === '/api/team-proposals' && req.method === 'GET') {
+      const snap = snapshot()
+      return sendJson(res, 200, {
+        drafts: teamproposal.list({
+          knownRoles: roles.list(),
+          knownProjects: snap.projects.filter((p) => p.path),
+        }),
+      })
+    }
+
+    if (url.pathname === '/api/team-proposal' && req.method === 'POST') {
+      readBody(req).then((payload) => {
+        const deckId = String(payload?.deckId || '')
+        const source = `session:${deckId}`
+
+        if (payload?.action === 'dismiss') {
+          return sendJson(res, 200, teamproposal.clear(String(payload?.source || source)))
+        }
+
+        const snap = snapshot()
+        const session = snap.sessions.find((s) => s.deckId === deckId)
+        if (!session) return sendJson(res, 400, { ok: false, error: 'No such session' })
+
+        const file = teamproposal.proposalFile(source)
+        const prompt = teamproposal.promptFor({
+          file,
+          source: `the work in this session (${session.name})`,
+          note: payload?.note,
+          roles: roles.list(),
+          projects: snap.projects.filter((p) => p.path),
+        })
+
+        /*
+         * The request is written down before the message goes out, so a draft
+         * in flight survives a restart and the screen can say what it is
+         * waiting for rather than showing nothing.
+         */
+        const opened = teamproposal.open(source, {
+          from: session.name,
+          note: payload?.note,
+          deckId,
+        })
+        if (!opened.ok) return sendJson(res, 500, opened)
+
+        const said = agents.say(deckId, prompt)
+        if (!said?.ok) {
+          teamproposal.clear(source)
+          return sendJson(res, 400, said || { ok: false, error: 'Could not reach that session' })
+        }
+        return sendJson(res, 200, { ok: true, source, queued: said.queued })
+      }).catch(() => sendJson(res, 400, { ok: false, error: 'bad request' }))
+      return
+    }
+
+    if (url.pathname === '/api/roles') {
+      if (req.method === 'GET') return sendJson(res, 200, { roles: roles.list() })
+      if (req.method === 'POST' || req.method === 'DELETE' || req.method === 'PATCH') {
+        readBody(req).then((payload) => {
+          let result
+          if (req.method === 'DELETE') result = roles.remove(payload?.id)
+          // PATCH edits one that exists; POST brings a new one in. Separate
+          // verbs because they are separate acts, the same way the workspace
+          // tells adding a folder from reordering one.
+          else if (req.method === 'PATCH') result = roles.update(payload?.id, payload?.patch || {})
+          else if (payload?.reset) result = roles.reset()
+          else result = roles.add(payload || {})
+          sendJson(res, result.ok ? 200 : 400, result)
+        }).catch(() => sendJson(res, 400, { ok: false, error: 'bad request' }))
+        return
+      }
+    }
+
     if (url.pathname === '/api/presets') {
       if (req.method === 'GET') return sendJson(res, 200, { presets: presets.list() })
 
@@ -1131,268 +1456,6 @@ export function createServer({ notifications = true, publicUrl = null } = {}) {
         })
         return
       }
-    }
-
-    if (url.pathname.startsWith('/api/transcript/')) {
-      const sessionId = url.pathname.slice('/api/transcript/'.length)
-      const file = findTranscript(sessionId)
-      if (!file) return sendJson(res, 404, { error: 'transcript not found', sessionId })
-      const limit = Number(url.searchParams.get('limit')) || 60
-      return sendJson(res, 200, { sessionId, ...readTranscript(file, { limit }) })
-    }
-
-    /**
-     * A project's roadmap: what it is trying to get done, in order.
-     *
-     * Reading is just reading. Writing is local-only, the same rule the
-     * permission lists follow: a roadmap is about to become the thing that
-     * decides which branches get created and what gets merged, and that is
-     * not a reach to hand to a phone on a café network.
-     */
-    if (url.pathname === '/api/roadmap') {
-      const projectPath = url.searchParams.get('path') || ''
-
-      if (req.method === 'GET') {
-        /*
-         * The list is every roadmap this project has, each with the state it
-         * is read as being in; `open` is the one on screen. Both in one
-         * answer, because the panel needs the tabs and the open roadmap at
-         * the same time and a second round trip would only make the tabs
-         * arrive before their contents.
-         */
-        const { path: key, roadmaps } = roadmap.list(projectPath)
-        const wanted = url.searchParams.get('roadmap')
-        const plan = roadmap.get(projectPath, wanted)
-
-        const envelope = {
-          path: key,
-          roadmaps: roadmaps.map(({ milestones, ...rest }) => ({
-            ...rest,
-            milestones: milestones.length,
-            done: milestones.filter((m) => m.status === 'done').length,
-          })),
-          landings: roadmap.LANDINGS,
-          statuses: roadmap.STATUSES,
-          states: roadmap.STATES,
-          /*
-           * A draft in flight, or one waiting to be looked at. It rides along
-           * with the list rather than having a route of its own because the
-           * panel that shows the roadmaps is the panel that has to offer it:
-           * a draft nobody is told about is a session's work thrown away.
-           */
-          proposal: proposal.read(projectPath),
-        }
-
-        if (!plan) return sendJson(res, 200, { ...envelope, open: null })
-
-        // The branch a milestone would create is computed here, against the
-        // branches and directories that actually exist, so the name on screen
-        // is the name that will be made. The browser guessing it was the
-        // version of this that could be wrong.
-        withPlannedNames(plan, key).then(
-          (open) => sendJson(res, 200, { ...envelope, open }),
-          () => sendJson(res, 200, { ...envelope, open: plan }),
-        )
-        return
-      }
-
-      if (req.method === 'POST') {
-        if (!isLocalRequest(req)) {
-          return sendJson(res, 403, { ok: false, error: 'Only from this machine' })
-        }
-        readBody(req).then(async (payload) => {
-          if (!payload) return sendJson(res, 400, { ok: false, error: 'Bad request' })
-          const target = payload.path || projectPath
-
-          const which = payload.roadmap || null
-
-          /*
-           * Draft a roadmap from a document that already exists.
-           *
-           * The document is named rather than looked for. A project this size
-           * has dozens of plans in `docs/` and only the person who just
-           * finished the analysis knows which one is live — so the path comes
-           * from the browser, and the only thing checked here is that it is
-           * really inside the project and really a file. A draft is not worth
-           * a path traversal.
-           *
-           * Launched the way `close` launches the report writer: an ordinary
-           * session, under the deck's own permission mode, visible in the
-           * panel while it works. It writes outside the project — into the
-           * deck's own directory — so in the default mode it will ask before
-           * it does, which is the correct thing for it to ask.
-           */
-          if (payload.action === 'propose') {
-            const relative = String(payload.document || '').trim()
-            if (!relative) return sendJson(res, 400, { ok: false, error: 'Name the document to read' })
-
-            const full = path.resolve(target, relative)
-            const inside = full === target || full.startsWith(target + path.sep)
-            if (!inside) return sendJson(res, 400, { ok: false, error: 'That document is outside the project' })
-            if (!fs.existsSync(full) || !fs.statSync(full).isFile()) {
-              return sendJson(res, 400, { ok: false, error: 'No such document' })
-            }
-
-            const file = proposal.proposalFile(target)
-            const live = snapshot().sessions
-            const session = agents.launch({
-              cwd: target,
-              prompt: proposal.promptFor({
-                document: path.relative(target, full) || relative,
-                note: payload.note,
-                file,
-                project: path.basename(target),
-              }),
-              name: 'roadmap draft',
-              permissionMode: settings.read().permissionMode,
-              taken: live.map((s) => s.peerName || s.name).filter(Boolean),
-            })
-
-            const opened = proposal.open(target, {
-              document: path.relative(target, full) || relative,
-              note: payload.note,
-              deckId: session.deckId,
-            })
-            if (!opened.ok) return sendJson(res, 500, opened)
-
-            return sendJson(res, 200, { ok: true, deckId: session.deckId, proposal: opened.proposal })
-          }
-
-          /*
-           * The draft becomes a roadmap, which is the first moment a person
-           * has agreed to any of it. Milestones are added one at a time
-           * through the same call the panel uses, so a drafted milestone and a
-           * typed one are the same thing by the time they are on disk — there
-           * is no second shape to keep working.
-           */
-          if (payload.action === 'accept-proposal') {
-            const draft = proposal.read(target)
-            if (!draft || draft.status !== 'ready') {
-              return sendJson(res, 400, { ok: false, error: 'No draft to accept' })
-            }
-
-            const made = roadmap.create(target, { goal: draft.goal })
-            if (!made.ok) return sendJson(res, 400, made)
-
-            for (const m of draft.milestones) {
-              if (!m.title && !m.task) continue
-              roadmap.add(target, made.roadmap.id, { title: m.title, task: m.task })
-            }
-
-            proposal.clear(target)
-            const plan = roadmap.get(target, made.roadmap.id)
-            return sendJson(res, 200, { ok: true, open: await withPlannedNames(plan, target) })
-          }
-
-          if (payload.action === 'dismiss-proposal') {
-            proposal.clear(target)
-            return sendJson(res, 200, { ok: true })
-          }
-
-          // The one action that touches the repository rather than the file.
-          if (payload.action === 'start') {
-            const started = await startMilestone(target, which, payload.id)
-            if (!started.ok) return sendJson(res, 400, started)
-            return sendJson(res, 200, { ...started, open: await withPlannedNames(started.roadmap, target) })
-          }
-
-          /*
-           * What finishing with a roadmap would tidy, before anything is
-           * tidied. Read-only, and the reason the button can say what it is
-           * about to do instead of asking you to trust it.
-           */
-          if (payload.action === 'cleanup-plan') {
-            return sendJson(res, 200, await cleanupPlan(target, which, { isLive: liveDeck }))
-          }
-
-          /*
-           * The first of the two halves of finishing: close the roadmap and
-           * write down what it did. Nothing is removed here, and that is the
-           * whole design — between closing and sweeping there is a pull
-           * request waiting for somebody, and a single button would force
-           * that decision at the one moment it cannot be made.
-           *
-           * The dossier is assembled before the session that writes the
-           * report is even started, so the evidence is already in hand and no
-           * longer depends on a worktree still being there when it is read.
-           */
-          if (payload.action === 'close') {
-            const built = await dossierFor(target, which)
-            if (!built.ok) return sendJson(res, 400, built)
-
-            const marked = roadmap.complete(target, which)
-            if (!marked.ok) return sendJson(res, 400, marked)
-
-            const file = reportPath(built.dossier)
-            const live = snapshot().sessions
-            const session = agents.launch({
-              cwd: target,
-              prompt: promptFor(built.dossier, { file }),
-              name: 'report',
-              /*
-               * The deck's own default, like `run`. A roadmap action must not
-               * be a way to widen privilege without ever seeing the word, and
-               * that holds for the session that only reads and writes one
-               * file just as much as for the ones that do the work.
-               */
-              permissionMode: settings.read().permissionMode,
-              taken: live.map((s) => s.peerName || s.name).filter(Boolean),
-            })
-
-            return sendJson(res, 200, {
-              ok: true,
-              file,
-              deckId: session.deckId,
-              summary: summaryOf(built.dossier),
-              open: await withPlannedNames(marked.roadmap, target),
-            })
-          }
-
-          /*
-           * Finishing with a roadmap, and — only when asked — removing the
-           * worktrees and branches its milestones left behind. Local-only
-           * like every write here, and it never removes a worktree with work
-           * in it or a session inside it.
-           */
-          if (payload.action === 'complete') {
-            const done = await completeRoadmap(target, which, {
-              clean: payload.clean === true,
-              isLive: liveDeck,
-            })
-            if (!done.ok) return sendJson(res, 400, done)
-            return sendJson(res, 200, { ...done, open: await withPlannedNames(done.roadmap, target) })
-          }
-
-          /*
-           * And the one that starts a process. The permission mode is the
-           * deck's own default rather than anything the browser sends: a
-           * roadmap is a list of tasks somebody typed once, and letting it
-           * carry a mode would make "run the roadmap" a way to widen
-           * privilege without ever seeing the word.
-           */
-          if (payload.action === 'run') {
-            const ran = await runMilestone(target, which, payload.id, {
-              launch: agents.launch,
-              mode: settings.read().permissionMode,
-              isLive: liveDeck,
-            })
-            if (!ran.ok) return sendJson(res, 400, ran)
-            // The sidebar has a new session in it as of now.
-            broadcastState()
-            return sendJson(res, 200, { ...ran, open: await withPlannedNames(ran.roadmap, target) })
-          }
-
-          const result = applyRoadmap(target, which, payload)
-          if (!result.ok) return sendJson(res, 400, result)
-          return sendJson(res, 200, {
-            ...result,
-            open: result.roadmap ? await withPlannedNames(result.roadmap, target) : null,
-          })
-        })
-        return
-      }
-
-      return sendJson(res, 405, { ok: false, error: 'Method not allowed' })
     }
 
     /**
@@ -1419,6 +1482,14 @@ export function createServer({ notifications = true, publicUrl = null } = {}) {
         (err) => sendJson(res, 500, { error: err.message }),
       )
       return
+    }
+
+    if (url.pathname.startsWith('/api/transcript/')) {
+      const sessionId = url.pathname.slice('/api/transcript/'.length)
+      const file = findTranscript(sessionId)
+      if (!file) return sendJson(res, 404, { error: 'transcript not found', sessionId })
+      const limit = Number(url.searchParams.get('limit')) || 60
+      return sendJson(res, 200, { sessionId, ...readTranscript(file, { limit }) })
     }
 
     /**
@@ -1601,7 +1672,9 @@ export function createServer({ notifications = true, publicUrl = null } = {}) {
   agents.emitter.on('permission', (session) => {
     if (notifications) {
       notify({
-        title: `${path.basename(resolveProjectRoot(session.cwd).root || session.cwd)} needs you`,
+        // The name you gave the project, so a notification on your phone
+        // matches the heading you would go looking for in the menu.
+        title: `${workspace.nameFor(resolveProjectRoot(session.cwd).root || session.cwd)} needs you`,
         subtitle: session.pending?.title || 'Permission',
         message: session.pending?.detail || 'Approve or deny in the deck',
       })
@@ -1631,6 +1704,9 @@ export function createServer({ notifications = true, publicUrl = null } = {}) {
         total: initial.total,
         meta: initial.meta,
         activity: initial.activity,
+        // What the session is actually thinking with, read off its own turns:
+        // neither the effort nor the advisor arrives any other way.
+        granted: initial.granted,
         // The file map's backlog: what this session has touched so far, so
         // opening the map mid-session shows the work instead of an empty sky.
         events: initial.events,
@@ -1662,7 +1738,7 @@ export function createServer({ notifications = true, publicUrl = null } = {}) {
         }))
       })
 
-      tail.on('update', ({ messages, activity, events, failed }) => {
+      tail.on('update', ({ messages, activity, granted, events, failed }) => {
         if (socket.readyState !== 1) return
         socket.send(JSON.stringify({
           type: 'transcript',
@@ -1673,6 +1749,9 @@ export function createServer({ notifications = true, publicUrl = null } = {}) {
           // Only when this batch actually says something about it. An absent
           // key means "unchanged"; a null means "not on a tool any more".
           ...(activity !== undefined ? { activity } : {}),
+          // Same rule. A turn that ran without an advisor sends null, which is
+          // news; a batch with no assistant line in it sends nothing at all.
+          ...(granted !== undefined ? { granted } : {}),
         }))
       })
     }
@@ -1768,6 +1847,17 @@ export function createServer({ notifications = true, publicUrl = null } = {}) {
             name: msg.name,
             permissionMode: mode,
             /*
+             * How this one should think. Unvalidated here on purpose: launch()
+             * is the funnel every path goes through and it cleans them there,
+             * so a value the browser invented becomes the default rather than
+             * a string handed to a subprocess. The permission mode above is
+             * the exception because it is the one that can widen privilege,
+             * and that guard belongs as close to the socket as possible.
+             */
+            model: msg.model,
+            effort: msg.effort,
+            advisor: msg.advisor,
+            /*
              * Every address currently answering, so the new one does not
              * duplicate it. The CLI takes the name it is given verbatim, and
              * two live sessions under one name is the case where delivery
@@ -1794,6 +1884,125 @@ export function createServer({ notifications = true, publicUrl = null } = {}) {
         return
       }
 
+      /*
+       * A whole team in one act.
+       *
+       * The same guards as a single launch and for the same reasons — one mode
+       * for everybody, validated here because this is the one that can widen
+       * privilege; peers resolved against the snapshot this server just built
+       * rather than trusted from a browser.
+       *
+       * One mode for the team and not one per member is not a simplification.
+       * Delivery between two sessions is decided by permission-mode parity: a
+       * coordinator that bypasses prompts, talking to specialists that ask for
+       * them, gets silence rather than an error. A team assembled across that
+       * line would look like it was working and would not be.
+       */
+      if (msg.type === 'team') {
+        try {
+          const mode = settings.isValidMode(msg.permissionMode)
+            ? msg.permissionMode
+            : settings.read().permissionMode
+          const live = snapshot().sessions
+          const peers = resolvePeers(live, msg.peers)
+          const members = Array.isArray(msg.members) ? msg.members : []
+          if (members.length === 0) {
+            reply(msg.id, { ok: false, error: 'A team needs at least one member' })
+            return
+          }
+
+          const results = agents.launchTeam({
+            members,
+            permissionMode: mode,
+            peers,
+            taken: live.map((s) => s.peerName || s.name).filter(Boolean),
+          })
+
+          /*
+           * `ok` for the batch means every member started, and the per-member
+           * results travel either way. A team where three came up and one did
+           * not is not a failure to be retried wholesale — the three are
+           * running — so the panel is given what it needs to say exactly that.
+           */
+          /*
+           * Written down before the reply goes out. A team the deck does not
+           * remember is four sessions that happen to have started together,
+           * indistinguishable from everything else running a minute later —
+           * which is the difference between a screen about teams and the
+           * session list wearing columns.
+           *
+           * Only the ones that started: a member with no deckId has no
+           * process and never had one.
+           */
+          const started = results.filter((r) => r.ok)
+          const saved = started.length > 0
+            ? teams.remember({
+              name: msg.name,
+              goal: msg.goal,
+              members: started.map((r) => {
+                /*
+                 * By position, never by name. Two members of the same role are
+                 * called the same thing on purpose, and matching on the name
+                 * handed both of them the first one's properties — which put
+                 * every Analyst on the "hands out the work" row.
+                 */
+                const asked = members[r.at] || {}
+                return {
+                  deckId: r.deckId,
+                  label: r.label,
+                  address: r.name,
+                  project: asked.project || '',
+                  delegates: Boolean(asked.delegates),
+                }
+              }),
+            })
+            : { ok: false }
+
+          /*
+           * Raised from a proposal: the seats that started are marked on it
+           * rather than the whole draft being thrown away. A proposal that
+           * says "raise these three now and the rest after a decision" would
+           * otherwise lose its second half at the first raise. Once every
+           * fillable seat has gone, the draft goes with it — the question has
+           * been answered.
+           *
+           * Its own try, because by this line the sessions are running and
+           * the team is written down. This is bookkeeping on the draft that
+           * suggested them, and when it threw — it did, on an undefined
+           * variable — the batch's catch answered "no session was launched"
+           * over four sessions that had just started. A failure here is a
+           * draft that stays on screen, which you can see and dismiss. It is
+           * not a launch that did not happen, and must never claim to be.
+           */
+          if (msg?.fromProposal && started.length > 0) {
+            try {
+              teamproposal.markRaised(String(msg.fromProposal), {
+                members: started.map((r) => members[r.at]).filter(Boolean),
+                teamId: saved.ok ? saved.team.id : null,
+              })
+              const left = teamproposal.read(String(msg.fromProposal), {
+                knownRoles: roles.list(),
+                knownProjects: snapshot().projects.filter((p) => p.path),
+              })
+              if (left?.allRaised) teamproposal.clear(String(msg.fromProposal))
+            } catch (err) {
+              console.error(`team raised, proposal not updated: ${err.message}`)
+            }
+          }
+
+          reply(msg.id, {
+            ok: results.every((r) => r.ok),
+            results,
+            teamId: saved.ok ? saved.team.id : null,
+            held: heldPeers(peers, mode).map((p) => p.name),
+          })
+        } catch (err) {
+          reply(msg.id, { ok: false, error: err.message })
+        }
+        broadcastState()
+        return
+      }
+
       if (msg.type === 'permission') {
         reply(msg.id, agents.respond(msg.deckId, msg.requestId, msg.decision))
         return
@@ -1805,7 +2014,7 @@ export function createServer({ notifications = true, publicUrl = null } = {}) {
       }
 
       if (msg.type === 'say') {
-        reply(msg.id, agents.say(msg.deckId, msg.text, msg.images, msg.files))
+        reply(msg.id, agents.say(msg.deckId, msg.text, msg.images, msg.files, msg.documents))
         return
       }
 
@@ -1837,6 +2046,22 @@ export function createServer({ notifications = true, publicUrl = null } = {}) {
           reply(msg.id, result)
           if (result.ok) broadcastState()
         })
+        return
+      }
+
+      /*
+       * The × on the progress strip. Only ever sends an empty list today,
+       * but it takes one rather than being a `clearTodos` verb: the session
+       * writes this field through its own tool, and a second way to set it
+       * that could only ever unset it would be the odd one out.
+       *
+       * agents.setTodos publishes, which reaches the browser through the
+       * 'changed' handler like any other state change — so there is no
+       * broadcastState() here, unlike `rename` above, where the thing that
+       * changed was a file on disk that nothing else watches.
+       */
+      if (msg.type === 'todos') {
+        reply(msg.id, agents.setTodos(msg.deckId, msg.todos))
         return
       }
 
@@ -1886,13 +2111,21 @@ export function createServer({ notifications = true, publicUrl = null } = {}) {
         return
       }
 
+
       /*
        * Put the process back without saying anything. `refresh` because the
        * session goes from having no process to having one, which is a change
        * every panel's list should see, not only the one that pressed it.
        */
       if (msg.type === 'wake') {
-        settle(msg.id, agents.wake(msg.deckId), { refresh: true })
+        // One or a set, same command. A team coming back after a restart is
+        // the ordinary reason for the plural, and which sessions are in it is
+        // the panel's question to answer, not this one's.
+        settle(
+          msg.id,
+          Array.isArray(msg.deckIds) ? agents.wakeMany(msg.deckIds) : agents.wake(msg.deckId),
+          { refresh: true },
+        )
         return
       }
 

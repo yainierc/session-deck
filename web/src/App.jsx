@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useDeck } from './useDeck.js'
 import { STATUS_LABEL, relativeTime, shortPath, describeSubpath } from './format.js'
 import Sidebar from './Sidebar.jsx'
+import { readLocal, writeLocal } from './localKey.js'
 import ProjectView from './ProjectView.jsx'
 import Launcher from './Launcher.jsx'
 import TeamLauncher from './TeamLauncher.jsx'
@@ -669,6 +670,16 @@ export default function App() {
   // On a phone the sidebar is a drawer over the content rather than a column
   // beside it. Desktop ignores this: there the sidebar is always in the grid.
   const [menuOpen, setMenuOpen] = useState(false)
+  /*
+   * Which side the projects menu sits on. Per browser, like the folded
+   * projects: it is about the screen in front of you, and a phone, where the
+   * menu is a drawer, has no say in it.
+   */
+  const [sideRight, setSideRight] = useState(() => readLocal('deck.sidebar.side') === 'right')
+  const flipSide = () => {
+    writeLocal('deck.sidebar.side', sideRight ? 'left' : 'right')
+    setSideRight(!sideRight)
+  }
   const closeMenu = useCallback(() => setMenuOpen(false), [])
 
   // Every navigation closes the drawer: on a phone you picked what to look at,
@@ -833,7 +844,7 @@ export default function App() {
   }
 
   return (
-    <div className={`app ${menuOpen ? 'menu-open' : ''}`}>
+    <div className={`app${menuOpen ? ' menu-open' : ''}${sideRight ? ' side-right' : ''}`}>
       {/* Phone-only bar: the only way back to the menu once it slides away. */}
       <div className="topbar">
         <button
@@ -856,6 +867,8 @@ export default function App() {
 
       <Sidebar
         open={menuOpen}
+        sideRight={sideRight}
+        onFlipSide={flipSide}
         onClose={closeMenu}
         projects={projects}
         selectedSession={view.kind === 'session' ? selected : null}

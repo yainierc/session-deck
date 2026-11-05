@@ -2409,6 +2409,29 @@ details[open] > summary .pu-caret { transform: rotate(90deg); }
 /* ---------- workspace sidebar ---------- */
 
 .sidebar-foot { padding: 10px 12px; border-top: 1px solid var(--line); }
+/* Beside the name, pushed to the far end of the row. */
+.side-flip {
+  margin-left: auto; flex: none; display: grid; place-items: center;
+  width: 26px; height: 26px; padding: 0;
+  background: none; border: 0; border-radius: 6px; color: var(--muted); cursor: pointer;
+}
+.side-flip:hover { background: var(--panel-2); color: var(--text); }
+
+/*
+ * The menu on the right. Only beside the content: on a phone it is a drawer
+ * over the content and the bottom bar, and which edge it slides from is not
+ * what this switch is about — so the switch is not offered there either.
+ */
+@media (min-width: 761px) {
+  .app.side-right { grid-template-columns: 1fr 310px; }
+  .app.side-right .sidebar { order: 2; border-right: 0; border-left: 1px solid var(--line); }
+  /* The ask cards hang from the top right corner; over the menu they would
+     cover its header, so they move to the content's own corner. */
+  .app.side-right .toasts { right: calc(310px + 14px); }
+}
+@media (max-width: 760px) {
+  .side-flip { display: none; }
+}
 
 .btn-ghost { background: transparent; color: var(--muted); }
 .btn-ghost:hover { color: var(--text); }

@@ -235,7 +235,7 @@ function ProjectMenu({ project, canUp, canDown, onNewTask, onMove, onRemove, onR
 
 export default function Sidebar({
   projects, selectedSession, selectedProject, onSelectSession, onSelectProject,
-  connected, onNewTask, onBrowseFolders, onRemoveFolder, onMoveProject, onOpenInbox, inboxActive,
+  connected, onNewTask, onBrowseFolders, sideRight, onFlipSide, onRemoveFolder, onMoveProject, onOpenInbox, inboxActive,
   onOpenSettings, settingsActive, onOpenRoom, roomActive, onOpenPlans, plansActive,
   onOpenPickUp, pickUpActive,
   onRenameProject, onOpenTeam, teamActive, open, onClose,
@@ -262,6 +262,19 @@ export default function Sidebar({
         <div className="brand-row">
           <h1>session-deck</h1>
           <span className={`link ${connected ? 'ok' : 'off'}`} title={connected ? 'connected' : 'reconnecting'} />
+          <button
+            className="side-flip"
+            onClick={onFlipSide}
+            title={sideRight ? 'Move this menu to the left' : 'Move this menu to the right'}
+            aria-label={sideRight ? 'Move this menu to the left' : 'Move this menu to the right'}
+          >
+            {/* A window with its menu drawn on the side it would move to. */}
+            <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.3">
+              <rect x="1.5" y="2.5" width="13" height="11" rx="1.5" />
+              <path d={sideRight ? 'M5.5 2.5v11' : 'M10.5 2.5v11'} />
+              <rect x={sideRight ? 1.5 : 10.5} y="2.5" width="4" height="11" fill="currentColor" stroke="none" opacity=".45" />
+            </svg>
+          </button>
           {/* Only reachable on phones, where the menu is a drawer over the view. */}
           <button className="drawer-close" onClick={onClose} aria-label="Close menu">
             <svg viewBox="0 0 12 12" width="12" height="12" aria-hidden="true">
